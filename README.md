@@ -1,13 +1,13 @@
 # bumpyride-web
 
-Companion web app for the [BumpyRide iOS app](https://github.com/jeccles-pif/bumpy-ride).
+Companion web app for the [BumpyRide iOS app](https://github.com/direwolfvm/bumpyride).
 
 Two feature sets:
 
 1. **Authenticated mirror of the iOS app** — sign in, see your rides, view routes and a per-user bump map. No recording. Phase 2+.
 2. **Public aggregated bump map** — global heat-map of average bumpiness per 20 ft cell, aggregated across all users. No routes, no timestamps, no per-user attribution. Phase 4.
 
-Synchronisation with the iOS app is over a REST API; the on-disk JSON format the iOS app writes (see [`bumpy-ride/BumpyRide/docs/SCHEMA.md`](../../bumpy-ride/BumpyRide/docs/SCHEMA.md)) is also the wire format here.
+Synchronisation with the iOS app is over a REST API; the on-disk JSON format the iOS app writes (see the iOS repo's [`docs/SCHEMA.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/SCHEMA.md)) is also the wire format here. Seamless pairing is specified at [`docs/WEB_PAIRING.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/WEB_PAIRING.md) and implemented as `GET /ios-pair` on this side.
 
 ## Status — Phase 3
 
@@ -83,7 +83,11 @@ bumpyride-web/
 
 ## API
 
-> **Integrating the iOS app?** See [`docs/IOS_INTEGRATION.md`](docs/IOS_INTEGRATION.md) for the full pairing flow, error semantics, and a reference Swift `SyncClient`.
+> **Integrating the iOS app?** See [`docs/IOS_INTEGRATION.md`](docs/IOS_INTEGRATION.md) for the full pairing flow, error semantics, and a reference Swift `SyncClient`. The seamless-pairing contract is at the iOS repo's [`docs/WEB_PAIRING.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/WEB_PAIRING.md).
+
+### `GET /ios-pair`
+
+Seamless pairing target for the iOS app's **Sign in with bumpyride.me** button (driven by `ASWebAuthenticationSession`). Required query params: `callback_scheme` (allow-list: today only `bumpyride`) and `state` (opaque CSRF, round-tripped verbatim). If the user is unauthenticated, 302s to `/login?next=…`. Once authenticated, mints a fresh API token labelled with the pairing timestamp and 302s to `<callback_scheme>://pair?token=<plaintext>&state=<echoed>`. Bad callback scheme or missing state → 400 HTML.
 
 ### `GET /api/me`
 
@@ -112,7 +116,7 @@ Tokens are `br_` + 32 random bytes (base64url). Only the sha256 is stored. Use t
 
 ### `POST /api/sync/ride`
 
-Accepts one `Ride` object (see [`SCHEMA.md`](../../bumpy-ride/BumpyRide/docs/SCHEMA.md)). **Requires** `Authorization: Bearer <token>`. Idempotent by `Ride.id` — re-uploading the same ride replaces its points and reconciles the global bump-cell aggregate.
+Accepts one `Ride` object (see [`SCHEMA.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/SCHEMA.md)). **Requires** `Authorization: Bearer <token>`. Idempotent by `Ride.id` — re-uploading the same ride replaces its points and reconciles the global bump-cell aggregate.
 
 **Request**
 

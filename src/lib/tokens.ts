@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { pool } from '@/db';
+import { db, pool } from '@/db';
 import { apiTokens } from '@/db/schema';
 
 // iOS sync tokens. Format: `br_` + base64url of 32 random bytes (~43 chars
@@ -44,6 +44,28 @@ export function parseBearer(authorization: string | null): string | null {
   if (!authorization) return null;
   const m = /^Bearer\s+(.+)$/i.exec(authorization);
   return m ? m[1].trim() : null;
+}
+
+/**
+ * Mint a fresh API token for a user. Used both by the `/settings/tokens`
+ * management UI and the `/ios-pair` seamless-pairing endpoint — same code
+ * path so server-issued tokens are indistinguishable from user-issued ones
+ * and revocable from the same UI.
+ */
+export async function createApiToken(
+  userId: string,
+  label: string,
+): Promise<{ id: string; label: string; createdAt: Date; token: string }> {
+  const { token, tokenHash } = generateApiToken();
+  const [row] = await db
+    .insert(apiTokens)
+    .values({ userId, tokenHash, label })
+    .returning({
+      id: apiTokens.id,
+      label: apiTokens.label,
+      createdAt: apiTokens.createdAt,
+    });
+  return { ...row, token };
 }
 
 // Convenience re-export for the management UI.

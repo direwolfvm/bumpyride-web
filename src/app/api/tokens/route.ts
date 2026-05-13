@@ -4,7 +4,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { auth } from '@/auth';
 import { db } from '@/db';
 import { apiTokens } from '@/db/schema';
-import { generateApiToken } from '@/lib/tokens';
+import { createApiToken } from '@/lib/tokens';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,22 +50,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid JSON' }, { status: 400 });
   }
 
-  const { token, tokenHash } = generateApiToken();
-  const [created] = await db
-    .insert(apiTokens)
-    .values({
-      userId: session.user.id,
-      tokenHash,
-      label: body.label,
-    })
-    .returning({
-      id: apiTokens.id,
-      label: apiTokens.label,
-      createdAt: apiTokens.createdAt,
-    });
-
   // The plaintext is returned exactly once — the user must copy it now.
-  return NextResponse.json({ ...created, token });
+  const created = await createApiToken(session.user.id, body.label);
+  return NextResponse.json(created);
 }
 
 export async function DELETE(req: NextRequest) {

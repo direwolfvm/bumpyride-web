@@ -2,17 +2,25 @@
 
 Audience: engineers on the BumpyRide iOS app adding "sync rides to my web account" support.
 
-This document is the canonical contract. The web app's `Ride` JSON wire format is documented separately in [`bumpy-ride/BumpyRide/docs/SCHEMA.md`](https://github.com/jeccles-pif/bumpy-ride/blob/main/BumpyRide/docs/SCHEMA.md); the web app accepts exactly that shape.
+This document is the bumpyride-web side of the iOS integration. Companion docs in the iOS repo:
+
+- [`docs/SCHEMA.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/SCHEMA.md) — the `Ride` / `RidePoint` JSON wire format. This web app accepts exactly that shape.
+- [`docs/WEB_PAIRING.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/WEB_PAIRING.md) — the contract for the seamless **Sign in with bumpyride.me** flow that `GET /ios-pair` (on this side) targets.
 
 ## TL;DR
 
-1. User signs up at `https://bumpyride.me/signup` (in a web browser, **not** in-app).
-2. User creates an API token at `https://bumpyride.me/settings/tokens` and copies it.
-3. User pastes the token into an iOS app **Settings → Web Account** screen.
-4. iOS app validates the token by calling `GET /api/me` and stores it in Keychain.
-5. From then on, every saved ride is `POST /api/sync/ride` with `Authorization: Bearer <token>`.
+**Seamless flow (primary path).** Driven by the **Sign in with bumpyride.me** button in iOS Settings → Web Account, fully specified in [`docs/WEB_PAIRING.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/WEB_PAIRING.md):
 
-The API is idempotent on `Ride.id`, so re-uploads (after a crash, after the user trims an existing ride, after a backfill) are safe.
+1. iOS opens `ASWebAuthenticationSession` at `https://bumpyride.me/ios-pair?callback_scheme=bumpyride&state=<random>`.
+2. If the user already has a Safari session, the web auto-recognises them. Otherwise they sign in (or sign up) inside the system-managed browser — the page understands a `?next=` round-trip back to `/ios-pair`.
+3. The web app mints a fresh API token (label: `iOS — paired <UTC timestamp>`) and 302-redirects to `bumpyride://pair?token=<plaintext>&state=<echoed-state>`.
+4. `ASWebAuthenticationSession` captures the callback URL privately — Safari history and other apps never see the token — and hands it to iOS.
+5. iOS validates the token by calling `GET /api/me`, stores it in Keychain, and shows "Connected as &lt;email&gt;".
+6. From then on, every saved ride is `POST /api/sync/ride` with `Authorization: Bearer <token>`.
+
+**Fallback flow (paste a token).** Used when the seamless flow can't be (older iOS app version, dev's user-agent, manual reconnect after revoke). The user creates a token at `/settings/tokens` and pastes it into iOS. Same Keychain destination, same downstream behavior.
+
+The sync API is idempotent on `Ride.id`, so re-uploads (after a crash, after the user trims an existing ride, after a backfill) are safe.
 
 ## Base URL
 
@@ -23,35 +31,55 @@ The API is idempotent on `Ride.id`, so re-uploads (after a crash, after the user
 
 Both serve the same instance. Use a build-flag-selectable constant in the iOS app so QA can switch between them.
 
-## Pairing flow (recommended)
+## Seamless pairing flow
 
 The web app is the source of truth for accounts. iOS never collects a password.
 
 ```
-┌──────────┐                     ┌────────────────────┐
-│  iOS UI  │                     │   bumpyride.me     │
-└────┬─────┘                     └─────────┬──────────┘
-     │  user taps "Connect web account"    │
-     ├─── opens SFSafariViewController ───►│
-     │   URL: https://bumpyride.me/login   │
-     │                                     │
-     │   user signs in (or signs up first) │
-     │   user navigates to /settings/tokens│
-     │   user creates a token, copies it   │
-     │   user dismisses Safari             │
-     │                                     │
-     │  user pastes token into iOS field   │
-     │                                     │
-     ├── GET /api/me  Bearer <token> ─────►│
-     │◄────── 200 { id, email, name } ─────┤
-     │                                     │
-     │  iOS stores token in Keychain       │
-     │  iOS shows "Connected as <email>"   │
+┌──────────┐                              ┌─────────────────────┐
+│  iOS UI  │                              │    bumpyride.me     │
+└────┬─────┘                              └──────────┬──────────┘
+     │ user taps "Sign in with bumpyride.me"        │
+     │                                              │
+     ├─ opens ASWebAuthenticationSession ──────────►│
+     │  GET /ios-pair?callback_scheme=bumpyride&    │
+     │      state=<uuid>                            │
+     │                                              │
+     │  ┌─ if not signed in ─────────────────────┐  │
+     │  │ 302 /login?next=/ios-pair?...          │  │
+     │  │ user signs in / signs up               │  │
+     │  │ 302 back to /ios-pair?...              │  │
+     │  └────────────────────────────────────────┘  │
+     │                                              │
+     │  mints fresh API token                       │
+     │◄─ 302 bumpyride://pair?token=…&state=…       │
+     │                                              │
+     │ ASWebAuthenticationSession captures URL      │
+     │ privately, returns it to iOS                 │
+     │                                              │
+     ├── GET /api/me  Bearer <token> ──────────────►│
+     │◄────── 200 { id, email, name } ──────────────┤
+     │                                              │
+     │ iOS stores token in Keychain                 │
+     │ iOS shows "Connected as <email>"             │
 ```
 
-### Why paste-the-token instead of OAuth-style deep linking?
+The full contract for `/ios-pair` lives in [`docs/WEB_PAIRING.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/WEB_PAIRING.md). Key constraints:
 
-Simpler. It's one extra step for the user but zero new state on the web (no pending-link table, no deep-link URL scheme to register, no Universal Links plumbing). If we later want a smoother UX, the natural upgrade is a deep-link "open in BumpyRide" button on `/settings/tokens` that hands the token to a custom URL scheme — see [Future: deep-link pairing](#future-deep-link-pairing).
+- `callback_scheme` is allow-listed server-side (today: `bumpyride` only). Unknown schemes return a 400 HTML page.
+- `state` is opaque to the server — it must be reflected back byte-for-byte. iOS uses it to verify the callback matches the request it initiated.
+- The plaintext token is fine in the redirect URL because `ASWebAuthenticationSession` captures the callback before Safari history sees it and no other app can claim the `bumpyride` scheme inside the auth session.
+
+### Fallback: paste a token from `/settings/tokens`
+
+When the seamless flow isn't available (older iOS app, dev environment, reconnect after a revoke), the existing paste-a-token UX is unchanged:
+
+1. User signs in at `/login` and creates a token at `/settings/tokens` in a regular browser.
+2. The plaintext token is shown **once** at creation — the user copies it.
+3. They paste it into the iOS app's manual entry field.
+4. iOS validates via `GET /api/me` and stores in Keychain.
+
+Both flows write to the same Keychain slot and produce the same downstream behavior.
 
 ## API reference
 
@@ -93,7 +121,7 @@ Content-Type: application/json
 }
 ```
 
-`Ride` follows [`SCHEMA.md`](https://github.com/jeccles-pif/bumpy-ride/blob/main/BumpyRide/docs/SCHEMA.md) exactly — including the `accelWindow` per-point arrays. Don't strip them on the way out; the web app stores them so playback works in the web UI later.
+`Ride` follows [`SCHEMA.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/SCHEMA.md) exactly — including the `accelWindow` per-point arrays. Don't strip them on the way out; the web app stores them so playback works in the web UI later.
 
 | Code | Body | iOS action |
 |---|---|---|
@@ -196,7 +224,7 @@ actor SyncClient {
 }
 ```
 
-`Ride` is the existing `Codable` type from [`Models.swift`](https://github.com/jeccles-pif/bumpy-ride/blob/main/BumpyRide/BumpyRide/Models.swift). Its `CodingKeys` already match the wire format, so re-encoding with an ISO-8601 `JSONEncoder` produces a valid payload.
+`Ride` is the existing `Codable` type from [`Models.swift`](https://github.com/direwolfvm/bumpyride/blob/main/BumpyRide/Models.swift). Its `CodingKeys` already match the wire format, so re-encoding with an ISO-8601 `JSONEncoder` produces a valid payload.
 
 ## Storing the token
 

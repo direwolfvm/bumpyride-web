@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import { count, eq, max, min } from 'drizzle-orm';
 import { auth } from '@/auth';
 import { db } from '@/db';
@@ -11,8 +12,6 @@ export default async function BumpMapPage() {
   const session = await auth();
   if (!session?.user?.id) redirect('/login');
 
-  // Bounding box of the user's data, so the map opens centered + zoomed
-  // appropriately even if they haven't ridden in DC.
   const bbox = await db
     .select({
       minLat: min(ridePoints.latitude),
@@ -34,25 +33,36 @@ export default async function BumpMapPage() {
     row.maxLon !== null;
 
   return (
-    <div style={{ maxWidth: 1100 }}>
-      <h1 style={{ marginTop: 0 }}>Your bump map</h1>
-      <p style={{ color: '#9a9aac' }}>
+    <div className="mx-auto max-w-6xl">
+      <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+        Your bump map
+      </h1>
+      <p className="mt-2 max-w-3xl text-text-muted">
         Average bumpiness aggregated across every ride you&apos;ve synced.
-        Cells are 20 ft on a side, anchored to the same grid the iOS app
-        uses, so cells match across web and device exactly.
+        Cells are 20 ft on a side, anchored to the same grid the iOS app uses,
+        so cells match across web and device exactly.
       </p>
-      {hasData ? (
-        <PrivateBumpMap
-          minLat={row.minLat!}
-          maxLat={row.maxLat!}
-          minLon={row.minLon!}
-          maxLon={row.maxLon!}
-        />
-      ) : (
-        <p style={{ color: '#9a9aac' }}>
-          No rides synced yet — pair the iOS app to start building your map.
-        </p>
-      )}
+      <div className="mt-6">
+        {hasData ? (
+          <PrivateBumpMap
+            minLat={row.minLat!}
+            maxLat={row.maxLat!}
+            minLon={row.minLon!}
+            maxLon={row.maxLon!}
+          />
+        ) : (
+          <div className="rounded-lg border border-dashed border-border bg-surface p-10 text-center text-text-muted">
+            No rides synced yet. Pair the iOS app from{' '}
+            <Link
+              href="/settings/tokens"
+              className="text-accent hover:underline"
+            >
+              /settings/tokens
+            </Link>{' '}
+            to start building your map.
+          </div>
+        )}
+      </div>
     </div>
   );
 }

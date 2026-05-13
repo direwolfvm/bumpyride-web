@@ -34,8 +34,6 @@ export function PrivateBumpMap({
     map.on('load', () => {
       map.addSource('bump', {
         type: 'raster',
-        // Server-rendered PNG tiles. Includes the iOS-style purple glow halo
-        // so sparse data stays visible at any zoom level.
         tiles: ['/api/tiles/user/{z}/{x}/{y}'],
         tileSize: 256,
       });
@@ -53,13 +51,7 @@ export function PrivateBumpMap({
   return (
     <div
       ref={containerRef}
-      style={{
-        width: '100%',
-        height: 600,
-        borderRadius: 6,
-        overflow: 'hidden',
-        border: '1px solid #22222c',
-      }}
+      className="h-[640px] w-full overflow-hidden rounded-lg border border-border"
     />
   );
 }

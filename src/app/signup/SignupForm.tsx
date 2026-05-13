@@ -28,7 +28,6 @@ export function SignupForm({ next }: { next?: string | null }) {
       setPending(false);
       return;
     }
-    // Auto-sign-in straight after creation.
     const signin = await signIn('credentials', {
       email,
       password,
@@ -44,42 +43,47 @@ export function SignupForm({ next }: { next?: string | null }) {
 
   return (
     <>
-      <form onSubmit={onSubmit} style={formStyle}>
-        <label style={labelStyle}>
-          Name (optional)
-          <input name="name" type="text" autoComplete="name" style={inputStyle} />
-        </label>
-        <label style={labelStyle}>
-          Email
+      <form onSubmit={onSubmit} className="flex flex-col gap-3">
+        <Field label="Name (optional)">
+          <input name="name" type="text" autoComplete="name" className={inputCls} />
+        </Field>
+        <Field label="Email">
           <input
             name="email"
             type="email"
             required
             autoComplete="email"
-            style={inputStyle}
+            className={inputCls}
           />
-        </label>
-        <label style={labelStyle}>
-          Password
+        </Field>
+        <Field label="Password">
           <input
             name="password"
             type="password"
             required
             minLength={8}
             autoComplete="new-password"
-            style={inputStyle}
+            className={inputCls}
           />
-        </label>
-        {error && <p style={errorStyle}>{error}</p>}
-        <button type="submit" disabled={pending} style={primaryButton}>
+        </Field>
+        {error && <p className="text-sm text-danger">{error}</p>}
+        <button
+          type="submit"
+          disabled={pending}
+          className="mt-1 rounded bg-accent-strong px-4 py-2 font-medium text-white hover:bg-accent-strong/90 disabled:cursor-not-allowed disabled:opacity-60"
+        >
           {pending ? 'Creating account…' : 'Create account'}
         </button>
       </form>
-      <div style={dividerStyle}>or</div>
+      <div className="my-4 flex items-center gap-3 text-xs text-text-dim">
+        <span className="h-px flex-1 bg-border" />
+        OR
+        <span className="h-px flex-1 bg-border" />
+      </div>
       <button
         type="button"
         onClick={() => signIn('google', { callbackUrl: redirectTarget })}
-        style={secondaryButton}
+        className="w-full rounded border border-border-strong px-4 py-2 hover:border-accent"
       >
         Continue with Google
       </button>
@@ -87,45 +91,14 @@ export function SignupForm({ next }: { next?: string | null }) {
   );
 }
 
-const formStyle = { display: 'flex', flexDirection: 'column', gap: '0.75rem' } as const;
-const labelStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '0.25rem',
-  fontSize: 14,
-  color: '#c4c4d4',
-} as const;
-const inputStyle = {
-  background: '#101019',
-  border: '1px solid #2a2a3a',
-  color: '#e8e8ee',
-  padding: '0.5rem 0.75rem',
-  borderRadius: 4,
-  fontSize: 14,
-} as const;
-const errorStyle = { color: '#ff8080', fontSize: 14, margin: 0 } as const;
-const primaryButton = {
-  background: '#3b5dff',
-  color: '#fff',
-  border: 'none',
-  padding: '0.6rem 1rem',
-  borderRadius: 4,
-  cursor: 'pointer',
-  fontSize: 14,
-} as const;
-const secondaryButton = {
-  background: 'transparent',
-  color: '#e8e8ee',
-  border: '1px solid #44445c',
-  padding: '0.6rem 1rem',
-  borderRadius: 4,
-  cursor: 'pointer',
-  fontSize: 14,
-  width: '100%',
-} as const;
-const dividerStyle = {
-  textAlign: 'center',
-  margin: '1rem 0',
-  color: '#6a6a7a',
-  fontSize: 12,
-} as const;
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1 text-sm text-text-muted">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const inputCls =
+  'rounded border border-border-strong bg-bg px-3 py-2 text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/30';

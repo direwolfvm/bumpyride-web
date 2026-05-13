@@ -19,12 +19,14 @@ export default async function SignupPage({
   const loginHref = next ? `/login?next=${encodeURIComponent(next)}` : '/login';
 
   return (
-    <div style={{ maxWidth: 360 }}>
-      <h1>Create account</h1>
-      <SignupForm next={next} />
-      <p style={{ marginTop: '1.5rem', fontSize: 14, color: '#9a9aac' }}>
+    <div className="mx-auto max-w-sm">
+      <h1 className="text-2xl font-semibold tracking-tight">Create account</h1>
+      <div className="mt-6 rounded-lg border border-border bg-surface p-6">
+        <SignupForm next={next} />
+      </div>
+      <p className="mt-6 text-sm text-text-muted">
         Already have an account?{' '}
-        <Link href={loginHref} style={{ color: '#9bb4ff' }}>
+        <Link href={loginHref} className="text-accent hover:underline">
           Sign in
         </Link>
         .

@@ -23,9 +23,11 @@ export default async function TokensPage() {
     .orderBy(desc(apiTokens.createdAt));
 
   return (
-    <div style={{ maxWidth: 720 }}>
-      <h1>iOS sync tokens</h1>
-      <p style={{ color: '#9a9aac' }}>
+    <div className="mx-auto max-w-3xl">
+      <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+        iOS sync tokens
+      </h1>
+      <p className="mt-2 max-w-2xl text-text-muted">
         Each token authorises one BumpyRide iOS install to upload rides to your
         account. The plaintext is shown <strong>once</strong> at creation —
         copy it into the iOS app immediately. Revoke any token at any time.

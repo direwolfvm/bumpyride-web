@@ -21,12 +21,14 @@ export default async function LoginPage({
     : '/signup';
 
   return (
-    <div style={{ maxWidth: 360 }}>
-      <h1>Sign in</h1>
-      <LoginForm next={next} />
-      <p style={{ marginTop: '1.5rem', fontSize: 14, color: '#9a9aac' }}>
+    <div className="mx-auto max-w-sm">
+      <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
+      <div className="mt-6 rounded-lg border border-border bg-surface p-6">
+        <LoginForm next={next} />
+      </div>
+      <p className="mt-6 text-sm text-text-muted">
         Don&apos;t have an account?{' '}
-        <Link href={signupHref} style={{ color: '#9bb4ff' }}>
+        <Link href={signupHref} className="text-accent hover:underline">
           Sign up
         </Link>
         .

@@ -31,8 +31,6 @@ export function RouteMap({ samples }: { samples: Sample[] }) {
     const el = containerRef.current;
     if (!el || samples.length === 0) return;
 
-    // One Feature per polyline segment, carrying the segment's average
-    // bumpiness so MapLibre's data-driven `line-color` paints the gradient.
     const features = [] as GeoJSON.Feature<GeoJSON.LineString>[];
     let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
     for (let i = 0; i < samples.length; i++) {
@@ -86,13 +84,7 @@ export function RouteMap({ samples }: { samples: Sample[] }) {
   return (
     <div
       ref={containerRef}
-      style={{
-        width: '100%',
-        height: 480,
-        borderRadius: 6,
-        overflow: 'hidden',
-        border: '1px solid #22222c',
-      }}
+      className="h-[480px] w-full overflow-hidden rounded-lg border border-border"
     />
   );
 }

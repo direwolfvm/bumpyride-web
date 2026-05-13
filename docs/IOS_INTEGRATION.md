@@ -133,6 +133,33 @@ Content-Type: application/json
 
 Body size note: a ride can be a few MB because of `accelWindow`. The server accepts up to 10 MB; rides larger than that would need a chunking protocol we haven't designed yet.
 
+### `GET /api/me/sharing`  *(bearer or session)*
+### `PATCH /api/me/sharing`  *(bearer or session)*
+
+Read and write the user's **public bump map** opt-in. The public aggregated map at `/map` only includes data from users with this flag set to `true`; default is `false`. The setting is a single user-wide boolean (not per-device) — every iOS install paired to the same account sees the same value, and any change from iOS is reflected on the web immediately (and vice versa).
+
+`GET` returns:
+
+```json
+{ "shareToPublicMap": false }
+```
+
+`PATCH` with body `{ "shareToPublicMap": true }` flips the flag and atomically backfills the user's existing rides into the public aggregate. Body `{ "shareToPublicMap": false }` subtracts them. The response includes a `changed` flag indicating whether the value actually moved:
+
+```json
+{ "shareToPublicMap": true, "changed": true }
+```
+
+| Code | Body | iOS action |
+|---|---|---|
+| 200 | `{ shareToPublicMap, changed? }` | Update local toggle state |
+| 400 | `{ error, issues? }` | Bug — log + reset toggle |
+| 401 | `{ error }` | Token revoked, same handling as `/api/sync/ride` 401 |
+
+**Recommended iOS UX**: on Settings / Privacy screen open, `GET` to refresh the toggle from the server (covers the case where the user toggled it from the web). On toggle, `PATCH` immediately; on failure, revert the toggle and show an error banner. Because the operation is idempotent on state (sending `true` when already `true` is a no-op `{ changed: false }`), retries are safe.
+
+**Backfill cost**: `PATCH true` aggregates the user's entire ride history into the public table in a single transaction. For typical libraries this is milliseconds. iOS should be tolerant of a short delay (≤2 s for very large libraries) and not time out aggressively.
+
 ### `POST /api/auth/signup` *(no auth)*
 
 Email + password registration. iOS shouldn't call this directly — drive users through the web signup page so the user creates a token in the same session.

@@ -1,0 +1,78 @@
+# Cloud Build pipeline driven by a trigger on push to main.
+#
+# Steps (sequential — migrations land before the new code starts serving so
+# the running revision never sees an unmigrated schema):
+#   1. Build the image, tagging with both $COMMIT_SHA and `latest`
+#   2. Push both tags to Artifact Registry
+#   3. Point the bumpyride-migrate Cloud Run Job at the new image
+#   4. Execute the job and wait for it to finish (build fails if migrate fails)
+#   5. Deploy the new image to the bumpyride-web Cloud Run service
+#
+# `gcloud run deploy/update` with only `--image` preserves env vars, secret
+# bindings, the service account, and the Cloud SQL connection set on the
+# existing revision/job.
+
+substitutions:
+  _REGION: us-east4
+  _REPO: us-east4-docker.pkg.dev/$PROJECT_ID/bumpyride-web/bumpyride-web
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=${_REPO}:$COMMIT_SHA
+      - --tag=${_REPO}:latest
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REPO}']
+    waitFor: [build]
+
+  - id: migrate-update
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - update
+      - bumpyride-migrate
+      - --image=${_REPO}:$COMMIT_SHA
+      - --region=${_REGION}
+      - --quiet
+    waitFor: [push]
+
+  - id: migrate-execute
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - execute
+      - bumpyride-migrate
+      - --region=${_REGION}
+      - --wait
+      - --quiet
+    waitFor: [migrate-update]
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - bumpyride-web
+      - --image=${_REPO}:$COMMIT_SHA
+      - --region=${_REGION}
+      - --quiet
+    waitFor: [migrate-execute]
+
+images:
+  - ${_REPO}:$COMMIT_SHA
+  - ${_REPO}:latest
+
+timeout: 1200s

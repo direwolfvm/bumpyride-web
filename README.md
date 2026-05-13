@@ -148,15 +148,54 @@ See [`migrations/0001_init.sql`](migrations/0001_init.sql) and [`migrations/0002
 
 ## Deploy (Cloud Run + Cloud SQL)
 
-The `bumpyride-web` Cloud Run service already builds from this repo on push to `main`. To finish wiring it up:
+Continuous deploy on push to `main` is driven by [`cloudbuild.yaml`](cloudbuild.yaml). The pipeline:
 
-1. **Cloud SQL Postgres instance** — provision a Postgres 16 instance in the same region as the Cloud Run service. Note its connection name `PROJECT:REGION:INSTANCE`.
-2. **Connect the service to Cloud SQL** — in the Cloud Run service settings, add the Cloud SQL connection. This mounts the Unix socket at `/cloudsql/PROJECT:REGION:INSTANCE`.
-3. **Secrets** — store these in Secret Manager and reference them as env vars on the Cloud Run service:
-   - `DATABASE_URL` — `postgres://USER:PASSWORD@/bumpyride?host=/cloudsql/PROJECT:REGION:INSTANCE`
-   - `AUTH_SECRET` — `openssl rand -base64 32`
-   - `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` — OAuth client credentials from [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials). Create a **Web application** OAuth client and add `<service-url>/api/auth/callback/google` as an authorised redirect URI.
-4. **Non-secret env** on the service:
-   - `AUTH_URL` — the public URL of the service (e.g. `https://bumpyride-web-xxx.run.app`). Auth.js uses this to build OAuth callback URLs.
-   - `AUTH_TRUST_HOST=true` — required when running behind Cloud Run's proxy.
-5. **Migrations** — run `node scripts/migrate.mjs` against the Cloud SQL instance before promoting a deploy that introduces a new migration. Easiest path: a one-off Cloud Run Job using the same image, with the same `DATABASE_URL` and Cloud SQL connection, command `node scripts/migrate.mjs`.
+1. Build the Docker image, tagged `:$COMMIT_SHA` and `:latest`
+2. Push both tags to Artifact Registry (`us-east4-docker.pkg.dev/bumpyride/bumpyride-web/bumpyride-web`)
+3. Point the `bumpyride-migrate` Cloud Run Job at the new image
+4. Execute the job and wait for completion — if migrations fail, the build fails and the new image never takes traffic
+5. Deploy the new image to the `bumpyride-web` Cloud Run service
+
+`gcloud run deploy/update` with only `--image` preserves env vars, secret bindings, the runtime service account, and the Cloud SQL connection set on the existing revision/job, so the pipeline doesn't have to know about any of that config.
+
+### Infrastructure (one-time setup)
+
+The following GCP resources back the deploy. Everything is in project `bumpyride`, region `us-east4`.
+
+| Resource | Name |
+|---|---|
+| Cloud SQL Postgres 16 | `bumpyride-db` (`db-g1-small`, 10 GB SSD, zonal) |
+| Database / SQL user | `bumpyride` / `bumpyride_app` |
+| Artifact Registry repo | `bumpyride-web` (Docker) |
+| Cloud Run service | `bumpyride-web` |
+| Cloud Run Job (migrations) | `bumpyride-migrate` |
+| Runtime service account | `bumpyride-run@bumpyride.iam.gserviceaccount.com` |
+
+The runtime SA has `roles/cloudsql.client` and `roles/secretmanager.secretAccessor` (the latter granted at the secret level for each of the four secrets below).
+
+### Secrets
+
+All in Secret Manager, mounted as Cloud Run env vars:
+
+| Env var | Secret name |
+|---|---|
+| `AUTH_SECRET` | `bumpyride-auth-secret` |
+| `DATABASE_URL` | `bumpyride-database-url` (form: `postgres://bumpyride_app:<pw>@/bumpyride?host=/cloudsql/bumpyride:us-east4:bumpyride-db`) |
+| `AUTH_GOOGLE_ID` | `bumpyride-google-id` |
+| `AUTH_GOOGLE_SECRET` | `bumpyride-google-secret` |
+| (plaintext) `AUTH_URL` | env var on the service — set to the canonical public URL so Auth.js builds correct OAuth callback URLs |
+| (plaintext) `AUTH_TRUST_HOST=true` | env var on the service |
+
+The DB password lives in `bumpyride-db-password` for reference; the value is also embedded in `DATABASE_URL`.
+
+### OAuth client
+
+Web application OAuth client in [Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials?project=bumpyride) with authorised redirect URIs for both the Cloud Run default URL and the production domain (`bumpyride.me`) so either entrypoint works.
+
+### Running a migration without a deploy
+
+```sh
+gcloud run jobs execute bumpyride-migrate --project=bumpyride --region=us-east4 --wait
+```
+
+Useful if you've applied a hot-fix migration directly to `migrations/` and need to run it before the next code change ships.

@@ -14,7 +14,10 @@
 
 substitutions:
   _REGION: us-east4
-  _REPO: us-east4-docker.pkg.dev/$PROJECT_ID/bumpyride-web/bumpyride-web
+  # Cloud Build does not expand built-in substitutions ($PROJECT_ID, $COMMIT_SHA, …)
+  # inside user-substitution VALUES — only inside `args`, `images`, `tags`, etc.
+  # So _REPO has to be a literal string, not interpolated from $PROJECT_ID.
+  _REPO: us-east4-docker.pkg.dev/bumpyride/bumpyride-web/bumpyride-web
 
 options:
   logging: CLOUD_LOGGING_ONLY

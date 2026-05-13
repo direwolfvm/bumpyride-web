@@ -1,14 +1,24 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { auth, signOut } from '@/auth';
 import { ThemeInit } from '@/components/ThemeInit';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import './globals.css';
 
+// Favicon + Apple touch icon are picked up by Next from src/app/icon.png
+// and src/app/apple-icon.png. We only need to spell out the OG image,
+// which is the brand mark from the iOS app at 512×512.
 export const metadata: Metadata = {
-  title: 'BumpyRide',
-  description: 'Companion web app for BumpyRide iOS.',
+  title: { default: 'BumpyRide', template: '%s · BumpyRide' },
+  description:
+    'Companion web app for the BumpyRide iOS app — sync rides, see road roughness, browse the public bump map.',
+  openGraph: {
+    title: 'BumpyRide',
+    description: 'Map road roughness with your iPhone.',
+    images: ['/icon-512.png'],
+  },
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
@@ -23,9 +33,17 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
             <Link
               href="/"
-              className="text-base font-semibold tracking-tight text-text no-underline hover:no-underline"
+              className="flex items-center gap-2 text-base font-semibold tracking-tight text-text no-underline hover:no-underline"
             >
-              BumpyRide
+              <Image
+                src="/icon-48.png"
+                alt=""
+                width={24}
+                height={24}
+                priority
+                className="rounded"
+              />
+              <span>BumpyRide</span>
             </Link>
             <nav className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
               <Link href="/map" className="text-accent hover:underline">

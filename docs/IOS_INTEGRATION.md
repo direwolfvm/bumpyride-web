@@ -1,0 +1,255 @@
+# BumpyRide iOS ↔ bumpyride-web integration
+
+Audience: engineers on the BumpyRide iOS app adding "sync rides to my web account" support.
+
+This document is the canonical contract. The web app's `Ride` JSON wire format is documented separately in [`bumpy-ride/BumpyRide/docs/SCHEMA.md`](https://github.com/jeccles-pif/bumpy-ride/blob/main/BumpyRide/docs/SCHEMA.md); the web app accepts exactly that shape.
+
+## TL;DR
+
+1. User signs up at `https://bumpyride.me/signup` (in a web browser, **not** in-app).
+2. User creates an API token at `https://bumpyride.me/settings/tokens` and copies it.
+3. User pastes the token into an iOS app **Settings → Web Account** screen.
+4. iOS app validates the token by calling `GET /api/me` and stores it in Keychain.
+5. From then on, every saved ride is `POST /api/sync/ride` with `Authorization: Bearer <token>`.
+
+The API is idempotent on `Ride.id`, so re-uploads (after a crash, after the user trims an existing ride, after a backfill) are safe.
+
+## Base URL
+
+| Environment | URL |
+|---|---|
+| Production | `https://bumpyride.me` |
+| Direct Cloud Run (pre-DNS / fallback) | `https://bumpyride-web-1020282465439.us-east4.run.app` |
+
+Both serve the same instance. Use a build-flag-selectable constant in the iOS app so QA can switch between them.
+
+## Pairing flow (recommended)
+
+The web app is the source of truth for accounts. iOS never collects a password.
+
+```
+┌──────────┐                     ┌────────────────────┐
+│  iOS UI  │                     │   bumpyride.me     │
+└────┬─────┘                     └─────────┬──────────┘
+     │  user taps "Connect web account"    │
+     ├─── opens SFSafariViewController ───►│
+     │   URL: https://bumpyride.me/login   │
+     │                                     │
+     │   user signs in (or signs up first) │
+     │   user navigates to /settings/tokens│
+     │   user creates a token, copies it   │
+     │   user dismisses Safari             │
+     │                                     │
+     │  user pastes token into iOS field   │
+     │                                     │
+     ├── GET /api/me  Bearer <token> ─────►│
+     │◄────── 200 { id, email, name } ─────┤
+     │                                     │
+     │  iOS stores token in Keychain       │
+     │  iOS shows "Connected as <email>"   │
+```
+
+### Why paste-the-token instead of OAuth-style deep linking?
+
+Simpler. It's one extra step for the user but zero new state on the web (no pending-link table, no deep-link URL scheme to register, no Universal Links plumbing). If we later want a smoother UX, the natural upgrade is a deep-link "open in BumpyRide" button on `/settings/tokens` that hands the token to a custom URL scheme — see [Future: deep-link pairing](#future-deep-link-pairing).
+
+## API reference
+
+All endpoints accept and return JSON. `Authorization: Bearer <token>` is required where indicated; tokens look like `br_` + ~43 url-safe characters.
+
+### `GET /api/me`  *(bearer)*
+
+Identity probe. Use this at pairing time to validate the token the user just pasted.
+
+```http
+GET /api/me HTTP/1.1
+Authorization: Bearer br_qWG1d-lTKwN7wLjOpbDnt84JB92XpIQvdKPDUq_nBtM
+```
+
+| Code | Body | Meaning |
+|---|---|---|
+| 200 | `{ id, email, name }` | Token is valid |
+| 401 | `{ error }` | Token missing or revoked |
+
+`name` may be `null` for users who signed up without one.
+
+### `POST /api/sync/ride`  *(bearer)*
+
+Upload one ride. Idempotent on `Ride.id`.
+
+```http
+POST /api/sync/ride HTTP/1.1
+Authorization: Bearer br_...
+Content-Type: application/json
+
+{
+  "schemaVersion": 1,
+  "id": "55E9B0BB-7CBE-4F23-9E0A-1D2C3F4A5B6C",
+  "title": "Ride Apr 23, 3:09 PM",
+  "startedAt": "2026-04-23T19:09:00Z",
+  "endedAt":   "2026-04-23T19:34:00Z",
+  "pocketMode": false,
+  "points": [ ... ]
+}
+```
+
+`Ride` follows [`SCHEMA.md`](https://github.com/jeccles-pif/bumpy-ride/blob/main/BumpyRide/docs/SCHEMA.md) exactly — including the `accelWindow` per-point arrays. Don't strip them on the way out; the web app stores them so playback works in the web UI later.
+
+| Code | Body | iOS action |
+|---|---|---|
+| 200 | `{ id, updated, pointCount, distanceM, avgBumpiness, maxBumpiness }` | Mark ride as synced |
+| 400 | `{ error, issues? }` | Log + skip — payload doesn't match schema (this is a bug in the iOS export path; the user shouldn't see it) |
+| 401 | `{ error }` | Token revoked. Wipe Keychain, drop user into the pairing UI |
+| 409 | `{ error }` | `ride_uuid` is already owned by a different account. Surface as "this ride was synced from another account" — user probably swapped tokens |
+| 503 / 5xx | (any) | Network / server. Retry with backoff (see [Sync strategy](#sync-strategy)) |
+
+Body size note: a ride can be a few MB because of `accelWindow`. The server accepts up to 10 MB; rides larger than that would need a chunking protocol we haven't designed yet.
+
+### `POST /api/auth/signup` *(no auth)*
+
+Email + password registration. iOS shouldn't call this directly — drive users through the web signup page so the user creates a token in the same session.
+
+## Sync strategy
+
+Recommended approach for iOS:
+
+1. **On ride save**: enqueue the new ride into a persistent "to-sync" queue (Core Data / SwiftData table flagging the ride as unsynced).
+2. **Background drain**: a single serial uploader pulls from the queue. After a successful 200, clear the unsynced flag. On 5xx or network failure, retry with exponential backoff (e.g. 30 s, 2 min, 10 min, hourly).
+3. **On app launch / reachable**: re-drain the queue.
+4. **On Edit / Trim / Split**: re-enqueue the affected ride(s). Same `Ride.id` ⇒ idempotent upsert.
+5. **On Delete locally**: there's no remote delete endpoint yet. Track this as an open item.
+
+### Backfill (first connect)
+
+When a user first pairs an account, queue every existing local ride for upload, oldest first. The server tolerates this; each call is independent.
+
+For very large libraries you may want to throttle to a few rides per minute to be polite — there's no rate limit today but please don't fire 1000 rides in parallel.
+
+### Schema version
+
+The server has a hard allow-list on `schemaVersion`. As of writing it only accepts `1`. When the iOS app bumps to `2`, the server must be updated first or it will reject every upload with `400`. Coordinate this transition through this repo.
+
+## Sample Swift sync client
+
+Reference shape — production code will need proper error mapping, persistence, and concurrency.
+
+```swift
+import Foundation
+
+actor SyncClient {
+    enum SyncResult {
+        case ok
+        case unauthorized
+        case conflict        // ride owned by another user
+        case malformed       // 400 — payload doesn't match schema
+        case retryable(Error)
+    }
+
+    private let baseURL: URL
+    private let tokenProvider: () -> String?
+    private let session: URLSession
+
+    init(baseURL: URL, tokenProvider: @escaping () -> String?, session: URLSession = .shared) {
+        self.baseURL = baseURL
+        self.tokenProvider = tokenProvider
+        self.session = session
+    }
+
+    func ping() async -> SyncResult {
+        guard let token = tokenProvider() else { return .unauthorized }
+        var req = URLRequest(url: baseURL.appendingPathComponent("api/me"))
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return await perform(req)
+    }
+
+    func uploadRide(_ ride: Ride) async -> SyncResult {
+        guard let token = tokenProvider() else { return .unauthorized }
+        var req = URLRequest(url: baseURL.appendingPathComponent("api/sync/ride"))
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        do {
+            req.httpBody = try encoder.encode(ride)
+        } catch {
+            return .malformed
+        }
+        return await perform(req)
+    }
+
+    private func perform(_ req: URLRequest) async -> SyncResult {
+        do {
+            let (_, response) = try await session.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return .retryable(URLError(.badServerResponse)) }
+            switch http.statusCode {
+            case 200..<300: return .ok
+            case 400:       return .malformed
+            case 401:       return .unauthorized
+            case 409:       return .conflict
+            default:        return .retryable(URLError(.cannotConnectToHost))
+            }
+        } catch {
+            return .retryable(error)
+        }
+    }
+}
+```
+
+`Ride` is the existing `Codable` type from [`Models.swift`](https://github.com/jeccles-pif/bumpy-ride/blob/main/BumpyRide/BumpyRide/Models.swift). Its `CodingKeys` already match the wire format, so re-encoding with an ISO-8601 `JSONEncoder` produces a valid payload.
+
+## Storing the token
+
+Keychain. Specifically:
+
+| Setting | Value |
+|---|---|
+| Service | `me.bumpyride.web` (or your app's bundle id) |
+| Account | the user's email returned by `/api/me`, or a single `"default"` slot if you only support one account |
+| Accessibility | `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` |
+
+Never put the token in `UserDefaults` or in `Info.plist`. It grants full sync access to the user's web account.
+
+## Connection-status UX
+
+Recommended Settings screen states:
+
+- **Not connected** — "Connect your web account" button + brief explainer + "Open bumpyride.me" link
+- **Connected** — "Connected as <email>" + "Disconnect" button
+- **Token invalid** — sticky banner: "Your sync connection is no longer authorised. Reconnect to keep your rides backed up." This shows after any 401 from `/api/sync/ride` or `/api/me`
+
+On "Disconnect" iOS should:
+1. Wipe Keychain
+2. Mark all rides locally as unsynced (so a future reconnect re-uploads)
+3. Tell the user to also revoke the token from `https://bumpyride.me/settings/tokens` if they're moving to a different web account
+
+## Privacy notes
+
+- Only data the user explicitly uploads ever reaches the server.
+- The public bump map (Phase 4, not yet built) aggregates `bumpiness` per 20 ft cell across all users with no per-user attribution, no timestamps, no routes — just average bumpiness per cell. Individual rides are never made public.
+- Tokens are sha256-hashed on storage; even with full DB read access on the web side, raw tokens cannot be retrieved — only re-issued.
+
+## Future: deep-link pairing
+
+When/if we want a smoother UX:
+
+1. Register a custom URL scheme on the iOS app, e.g. `bumpyride://link`.
+2. Add a "Send to iOS" button on `/settings/tokens` that calls `window.location = 'bumpyride://link?token=' + encodeURIComponent(token)`.
+3. iOS app handles the URL, extracts the token, validates with `/api/me`, stores in Keychain.
+
+This stays compatible with copy-paste — both flows write the same Keychain slot.
+
+A more secure variant (token never appears in a URL) would be a short-lived "pairing code" the user types from web → iOS. Worth the extra protocol only if we see token leakage in practice.
+
+## Open items
+
+These would make the integration story more complete. Track or file as issues against this repo:
+
+- **Ride delete endpoint** — iOS has no way to tell the server "the user deleted this ride locally; drop it from the web mirror".
+- **Ride list endpoint** — iOS could pull rides created on other devices, useful for restoring after reinstall.
+- **Server push for trim/split conflicts** — currently the last write wins. If the same ride is edited on both web and iOS, the most recent upload silently overwrites.
+- **Pairing-code flow** — see above.
+
+## Contact
+
+Open issues at https://github.com/direwolfvm/bumpyride-web/issues. Reference the iOS commit / build so we can correlate sync failures with code revisions.

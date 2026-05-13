@@ -43,7 +43,8 @@ export function PublicBumpMap({
         id: 'bump',
         type: 'raster',
         source: 'bump',
-        paint: { 'raster-opacity': 0.85 },
+        // The tile renderer already bakes per-cell alpha + the purple glow
+        // into the PNG; an extra raster-opacity here would dilute the glow.
       });
     });
 

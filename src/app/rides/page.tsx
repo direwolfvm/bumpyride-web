@@ -47,66 +47,93 @@ export default async function RidesListPage({
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div style={{ maxWidth: 960 }}>
-      <h1 style={{ marginTop: 0 }}>Your rides</h1>
-      <p style={{ color: '#9a9aac' }}>
-        {total === 0
-          ? 'No rides synced yet. Pair the iOS app to start syncing.'
-          : `${total} ride${total === 1 ? '' : 's'}.`}
-      </p>
+    <div className="mx-auto max-w-5xl">
+      <div className="flex items-baseline justify-between gap-3">
+        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+          Your rides
+        </h1>
+        <span className="text-sm text-text-muted">
+          {total === 0 ? '' : `${total} ride${total === 1 ? '' : 's'}`}
+        </span>
+      </div>
 
-      {rows.length > 0 && (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-          <thead>
-            <tr style={{ textAlign: 'left', color: '#9a9aac' }}>
-              <th style={th}>Title</th>
-              <th style={th}>Started</th>
-              <th style={th}>Distance</th>
-              <th style={th}>Duration</th>
-              <th style={th}>Avg bumpiness</th>
-              <th style={th}>Max bumpiness</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.rideUuid} style={{ borderTop: '1px solid #22222c' }}>
-                <td style={td}>
-                  <Link
-                    href={`/rides/${r.rideUuid}`}
-                    style={{ color: '#9bb4ff', textDecoration: 'none' }}
-                  >
-                    {r.title}
-                  </Link>
-                </td>
-                <td style={td}>{formatDateTime(r.startedAt)}</td>
-                <td style={td}>{formatDistance(r.distanceM)}</td>
-                <td style={td}>
-                  {formatDuration(
-                    (r.endedAt.getTime() - r.startedAt.getTime()) / 1000,
-                  )}
-                </td>
-                <td style={td}>{r.avgBumpiness.toFixed(2)} g</td>
-                <td style={td}>{r.maxBumpiness.toFixed(2)} g</td>
+      {total === 0 ? (
+        <EmptyState />
+      ) : (
+        <div className="mt-6 overflow-hidden rounded-lg border border-border bg-surface">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border bg-surface-2/50 text-left text-xs uppercase tracking-wide text-text-muted">
+                <th className="px-4 py-3 font-medium">Title</th>
+                <th className="px-4 py-3 font-medium">Started</th>
+                <th className="px-4 py-3 font-medium">Distance</th>
+                <th className="px-4 py-3 font-medium">Duration</th>
+                <th className="px-4 py-3 font-medium">Avg bumpiness</th>
+                <th className="px-4 py-3 font-medium">Max bumpiness</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr
+                  key={r.rideUuid}
+                  className="border-t border-border first:border-t-0 hover:bg-surface-2/60"
+                >
+                  <td className="px-4 py-3">
+                    <Link
+                      href={`/rides/${r.rideUuid}`}
+                      className="font-medium text-accent hover:underline"
+                    >
+                      {r.title}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap text-text-muted">
+                    {formatDateTime(r.startedAt)}
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap tabular-nums">
+                    {formatDistance(r.distanceM)}
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap tabular-nums">
+                    {formatDuration(
+                      (r.endedAt.getTime() - r.startedAt.getTime()) / 1000,
+                    )}
+                  </td>
+                  <td className="px-4 py-3 tabular-nums">
+                    {r.avgBumpiness.toFixed(2)} g
+                  </td>
+                  <td className="px-4 py-3 tabular-nums">
+                    {r.maxBumpiness.toFixed(2)} g
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {totalPages > 1 && (
-        <nav style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
-          {page > 1 && (
-            <Link href={`/rides?page=${page - 1}`} style={pageLink}>
+        <nav className="mt-4 flex items-center gap-4 text-sm">
+          {page > 1 ? (
+            <Link
+              href={`/rides?page=${page - 1}`}
+              className="text-accent hover:underline"
+            >
               ← Prev
             </Link>
+          ) : (
+            <span className="text-text-dim">← Prev</span>
           )}
-          <span style={{ color: '#9a9aac', fontSize: 14 }}>
+          <span className="text-text-muted">
             Page {page} of {totalPages}
           </span>
-          {page < totalPages && (
-            <Link href={`/rides?page=${page + 1}`} style={pageLink}>
+          {page < totalPages ? (
+            <Link
+              href={`/rides?page=${page + 1}`}
+              className="text-accent hover:underline"
+            >
               Next →
             </Link>
+          ) : (
+            <span className="text-text-dim">Next →</span>
           )}
         </nav>
       )}
@@ -114,10 +141,16 @@ export default async function RidesListPage({
   );
 }
 
-const th = { padding: '0.5rem 0.75rem', fontWeight: 500 } as const;
-const td = { padding: '0.5rem 0.75rem' } as const;
-const pageLink = {
-  color: '#9bb4ff',
-  textDecoration: 'none',
-  fontSize: 14,
-} as const;
+function EmptyState() {
+  return (
+    <div className="mt-6 rounded-lg border border-dashed border-border bg-surface p-10 text-center">
+      <p className="text-text-muted">
+        No rides synced yet. Pair the iOS app from{' '}
+        <Link href="/settings/tokens" className="text-accent hover:underline">
+          /settings/tokens
+        </Link>{' '}
+        and rides will appear here as they upload.
+      </p>
+    </div>
+  );
+}

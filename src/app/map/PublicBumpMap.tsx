@@ -36,8 +36,7 @@ export function PublicBumpMap({
         type: 'raster',
         tiles: ['/api/tiles/public/{z}/{x}/{y}'],
         tileSize: 256,
-        attribution:
-          'Bump data: consenting BumpyRide users',
+        attribution: 'Bump data: consenting BumpyRide users',
       });
       map.addLayer({
         id: 'bump',
@@ -53,13 +52,7 @@ export function PublicBumpMap({
   return (
     <div
       ref={containerRef}
-      style={{
-        width: '100%',
-        height: 640,
-        borderRadius: 6,
-        overflow: 'hidden',
-        border: '1px solid #22222c',
-      }}
+      className="h-[640px] w-full overflow-hidden rounded-lg border border-border"
     />
   );
 }

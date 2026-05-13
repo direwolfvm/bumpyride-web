@@ -36,23 +36,13 @@ export function SharingToggle({ initial }: { initial: boolean }) {
   }
 
   return (
-    <div style={{ marginTop: '1rem' }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '1rem',
-          padding: '1rem',
-          background: '#101019',
-          border: '1px solid #22222c',
-          borderRadius: 6,
-        }}
-      >
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 500 }}>
+    <div className="mt-6">
+      <div className="flex items-center gap-4 rounded-lg border border-border bg-surface p-4">
+        <div className="flex-1">
+          <div className="font-medium">
             {enabled ? 'On — sharing my rides' : 'Off — keeping my rides private'}
           </div>
-          <div style={{ color: '#9a9aac', fontSize: 13 }}>
+          <div className="mt-0.5 text-sm text-text-muted">
             {enabled
               ? 'Your synced rides contribute to the public bump map.'
               : 'Your synced rides stay in your account only.'}
@@ -62,26 +52,18 @@ export function SharingToggle({ initial }: { initial: boolean }) {
           type="button"
           onClick={() => setTo(!enabled)}
           disabled={pending}
-          style={{
-            background: enabled ? '#22443a' : '#3b5dff',
-            color: '#fff',
-            border: 'none',
-            padding: '0.6rem 1.25rem',
-            borderRadius: 4,
-            cursor: pending ? 'wait' : 'pointer',
-            fontSize: 14,
-            minWidth: 130,
-          }}
+          aria-pressed={enabled}
+          className={`min-w-[132px] rounded px-4 py-2 font-medium text-white transition disabled:cursor-wait disabled:opacity-70 ${
+            enabled
+              ? 'bg-success/20 text-success hover:bg-success/30'
+              : 'bg-accent-strong hover:bg-accent-strong/90'
+          }`}
         >
           {pending ? '…' : enabled ? 'Turn off' : 'Turn on'}
         </button>
       </div>
-      {flash && (
-        <p style={{ color: '#80c890', fontSize: 13, marginTop: '0.75rem' }}>{flash}</p>
-      )}
-      {error && (
-        <p style={{ color: '#ff8080', fontSize: 13, marginTop: '0.75rem' }}>{error}</p>
-      )}
+      {flash && <p className="mt-3 text-sm text-success">{flash}</p>}
+      {error && <p className="mt-3 text-sm text-danger">{error}</p>}
     </div>
   );
 }

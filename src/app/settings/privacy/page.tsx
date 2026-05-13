@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { eq } from 'drizzle-orm';
 import { auth } from '@/auth';
@@ -22,34 +23,31 @@ export default async function PrivacySettingsPage() {
   });
 
   return (
-    <div style={{ maxWidth: 720 }}>
-      <h1>Privacy</h1>
-      <h2 style={sectionH2}>Contribute to the public bump map</h2>
-      <p style={{ color: '#9a9aac', lineHeight: 1.5 }}>
+    <div className="mx-auto max-w-3xl">
+      <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+        Privacy
+      </h1>
+      <h2 className="mt-6 text-sm font-medium uppercase tracking-wide text-text-muted">
+        Contribute to the public bump map
+      </h2>
+      <p className="mt-2 text-text-muted">
         The{' '}
-        <a href="/map" style={{ color: '#9bb4ff' }}>
+        <Link href="/map" className="text-accent hover:underline">
           public bump map
-        </a>{' '}
+        </Link>{' '}
         aggregates pavement roughness across all consenting riders. Cells are
         20 ft squares, and we only show a cell once it has at least{' '}
-        {MIN_PUBLIC_CELL_COUNT} samples — so opting in alone won&apos;t
-        publish your exact route. No timestamps, no routes, no per-user
-        attribution are ever in the public output.
+        {MIN_PUBLIC_CELL_COUNT} samples — so opting in alone won&apos;t publish
+        your exact route. No timestamps, no routes, no per-user attribution are
+        ever in the public output.
       </p>
-      <p style={{ color: '#9a9aac', lineHeight: 1.5 }}>
+      <p className="mt-3 text-text-muted">
         Sharing is <strong>off by default</strong>. Toggling here doesn&apos;t
-        affect your private rides view or the iOS app — only what
-        contributes to the public aggregate. Toggling on backfills your
-        existing rides into the aggregate; toggling off removes them.
+        affect your private rides view or the iOS app — only what contributes
+        to the public aggregate. Toggling on backfills your existing rides into
+        the aggregate; toggling off removes them.
       </p>
       <SharingToggle initial={user?.shareToPublicMap ?? false} />
     </div>
   );
 }
-
-const sectionH2 = {
-  fontSize: 18,
-  margin: '1.5rem 0 0.75rem 0',
-  color: '#c4c4d4',
-  fontWeight: 500,
-} as const;

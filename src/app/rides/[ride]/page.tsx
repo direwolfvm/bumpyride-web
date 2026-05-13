@@ -44,10 +44,10 @@ export default async function RideDetailPage({
   }));
 
   return (
-    <div style={{ maxWidth: 960 }}>
+    <div className="mx-auto max-w-5xl">
       <RenameForm rideUuid={ride.rideUuid} initialTitle={ride.title} />
 
-      <div style={statsStyle}>
+      <dl className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3 lg:grid-cols-4">
         <Stat label="Started" value={formatDateTime(ride.startedAt)} />
         <Stat
           label="Duration"
@@ -69,51 +69,51 @@ export default async function RideDetailPage({
               : 'unknown'
           }
         />
-      </div>
+      </dl>
 
-      <section style={{ marginTop: '2rem' }}>
-        <h2 style={sectionH2}>Route</h2>
+      <Section title="Route">
         {samples.length > 0 ? (
           <RouteMap samples={samples} />
         ) : (
-          <p style={{ color: '#9a9aac' }}>No points were recorded.</p>
+          <EmptyBox>No points were recorded.</EmptyBox>
         )}
-      </section>
+      </Section>
 
-      <section style={{ marginTop: '2rem' }}>
-        <h2 style={sectionH2}>Bumpiness over time</h2>
+      <Section title="Bumpiness over time">
         {samples.length > 0 ? (
           <BumpinessChart samples={samples} />
         ) : (
-          <p style={{ color: '#9a9aac' }}>No samples to chart.</p>
+          <EmptyBox>No samples to chart.</EmptyBox>
         )}
-      </section>
+      </Section>
     </div>
   );
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div>
-      <div style={{ fontSize: 12, color: '#9a9aac' }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 500 }}>{value}</div>
+    <div className="bg-surface px-4 py-3">
+      <dt className="text-xs uppercase tracking-wide text-text-muted">{label}</dt>
+      <dd className="mt-0.5 text-lg font-medium tabular-nums">{value}</dd>
     </div>
   );
 }
 
-const statsStyle = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-  gap: '1rem',
-  padding: '1rem',
-  background: '#101019',
-  borderRadius: 6,
-  border: '1px solid #22222c',
-} as const;
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="mt-8">
+      <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-text-muted">
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
 
-const sectionH2 = {
-  fontSize: 18,
-  margin: '0 0 0.75rem 0',
-  color: '#c4c4d4',
-  fontWeight: 500,
-} as const;
+function EmptyBox({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-surface p-6 text-center text-text-muted">
+      {children}
+    </div>
+  );
+}

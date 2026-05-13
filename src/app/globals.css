@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+/* Project theme. Tailwind v4 reads design tokens from CSS variables in
+   the @theme block; class names like `bg-surface`, `text-muted` resolve
+   to these. The palette is a polished take on the existing dark theme. */
+@theme {
+  --color-bg: #09090e;
+  --color-surface: #101019;
+  --color-surface-2: #15151f;
+  --color-border: #22222c;
+  --color-border-strong: #2a2a3a;
+
+  --color-text: #e8e8ee;
+  --color-text-muted: #9a9aac;
+  --color-text-dim: #6a6a7a;
+
+  --color-accent: #9bb4ff;
+  --color-accent-strong: #3b5dff;
+  --color-accent-soft: #1f2440;
+
+  --color-success: #80c890;
+  --color-danger: #ff8080;
+  --color-danger-soft: #5a2a2a;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+/* Base layer: small tweaks that apply everywhere. Most styling lives in
+   utility classes per component. */
+@layer base {
+  html,
+  body {
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    /* Slightly tighter line-height than the browser default; numbers and
+       data tables feel cramped at 1.6. */
+    line-height: 1.5;
+  }
+
+  a {
+    color: var(--color-accent);
+  }
+  a:hover {
+    text-decoration: underline;
+  }
+
+  /* Form controls inherit the page font so dark-on-dark inputs match. */
+  input,
+  textarea,
+  button,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* MapLibre tile container needs a solid background so the basemap
+     loading state doesn't flash white on this dark theme. */
+  .maplibregl-map {
+    background: var(--color-surface);
+  }
+}

@@ -11,7 +11,9 @@ type Token = {
 
 export function TokensManager({ initialTokens }: { initialTokens: Token[] }) {
   const [tokens, setTokens] = useState<Token[]>(initialTokens);
-  const [revealed, setRevealed] = useState<{ id: string; token: string } | null>(null);
+  const [revealed, setRevealed] = useState<{ id: string; token: string } | null>(
+    null,
+  );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,7 +54,9 @@ export function TokensManager({ initialTokens }: { initialTokens: Token[] }) {
   }
 
   async function onRevoke(id: string) {
-    if (!confirm('Revoke this token? The iOS install using it will stop syncing.')) {
+    if (
+      !confirm('Revoke this token? The iOS install using it will stop syncing.')
+    ) {
       return;
     }
     const res = await fetch(`/api/tokens?id=${encodeURIComponent(id)}`, {
@@ -70,87 +74,39 @@ export function TokensManager({ initialTokens }: { initialTokens: Token[] }) {
     <>
       <form
         onSubmit={onCreate}
-        style={{
-          display: 'flex',
-          gap: '0.5rem',
-          margin: '1.5rem 0',
-          alignItems: 'flex-end',
-        }}
+        className="mt-6 flex flex-wrap items-end gap-3 rounded-lg border border-border bg-surface p-4"
       >
-        <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          <span style={{ fontSize: 14, color: '#c4c4d4' }}>Label</span>
+        <label className="flex flex-1 min-w-[200px] flex-col gap-1 text-sm text-text-muted">
+          <span>Label</span>
           <input
             name="label"
             placeholder="e.g. iPhone 15"
             maxLength={80}
-            style={{
-              background: '#101019',
-              border: '1px solid #2a2a3a',
-              color: '#e8e8ee',
-              padding: '0.5rem 0.75rem',
-              borderRadius: 4,
-              fontSize: 14,
-            }}
+            className="rounded border border-border-strong bg-bg px-3 py-2 text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"
           />
         </label>
         <button
           type="submit"
           disabled={pending}
-          style={{
-            background: '#3b5dff',
-            color: '#fff',
-            border: 'none',
-            padding: '0.6rem 1rem',
-            borderRadius: 4,
-            cursor: 'pointer',
-            fontSize: 14,
-          }}
+          className="rounded bg-accent-strong px-4 py-2 font-medium text-white hover:bg-accent-strong/90 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {pending ? 'Creating…' : 'Create token'}
         </button>
       </form>
-      {error && <p style={{ color: '#ff8080', fontSize: 14 }}>{error}</p>}
+      {error && <p className="mt-3 text-sm text-danger">{error}</p>}
 
       {revealed && (
-        <div
-          style={{
-            padding: '1rem',
-            border: '1px solid #3b5dff',
-            background: '#10101e',
-            borderRadius: 4,
-            marginBottom: '1.5rem',
-          }}
-        >
-          <p style={{ marginTop: 0, color: '#9bb4ff', fontSize: 14 }}>
+        <div className="mt-6 rounded-lg border border-accent-strong bg-accent-soft p-4">
+          <p className="text-sm text-accent">
             Copy this token now — it won&apos;t be shown again.
           </p>
-          <code
-            style={{
-              display: 'block',
-              wordBreak: 'break-all',
-              background: '#0b0b10',
-              padding: '0.5rem 0.75rem',
-              borderRadius: 4,
-              fontSize: 13,
-            }}
-          >
+          <code className="mt-2 block break-all rounded bg-bg px-3 py-2 font-mono text-sm">
             {revealed.token}
           </code>
           <button
             type="button"
-            onClick={() => {
-              navigator.clipboard.writeText(revealed.token);
-            }}
-            style={{
-              marginTop: '0.5rem',
-              background: 'transparent',
-              color: '#9bb4ff',
-              border: '1px solid #3b5dff',
-              padding: '0.25rem 0.75rem',
-              borderRadius: 4,
-              cursor: 'pointer',
-              fontSize: 13,
-            }}
+            onClick={() => navigator.clipboard.writeText(revealed.token)}
+            className="mt-2 rounded border border-accent-strong px-3 py-1 text-sm text-accent hover:bg-accent-strong/20"
           >
             Copy
           </button>
@@ -158,50 +114,45 @@ export function TokensManager({ initialTokens }: { initialTokens: Token[] }) {
       )}
 
       {tokens.length === 0 ? (
-        <p style={{ color: '#9a9aac' }}>No tokens yet. Create one above.</p>
+        <p className="mt-6 text-text-muted">No tokens yet. Create one above.</p>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-          <thead>
-            <tr style={{ textAlign: 'left', color: '#9a9aac' }}>
-              <th style={th}>Label</th>
-              <th style={th}>Created</th>
-              <th style={th}>Last used</th>
-              <th style={th} />
-            </tr>
-          </thead>
-          <tbody>
-            {tokens.map((t) => (
-              <tr key={t.id} style={{ borderTop: '1px solid #22222c' }}>
-                <td style={td}>{t.label}</td>
-                <td style={td}>{new Date(t.createdAt).toLocaleString()}</td>
-                <td style={td}>
-                  {t.lastUsedAt ? new Date(t.lastUsedAt).toLocaleString() : '—'}
-                </td>
-                <td style={{ ...td, textAlign: 'right' }}>
-                  <button
-                    type="button"
-                    onClick={() => onRevoke(t.id)}
-                    style={{
-                      background: 'transparent',
-                      color: '#ff8080',
-                      border: '1px solid #5a2a2a',
-                      padding: '0.25rem 0.75rem',
-                      borderRadius: 4,
-                      cursor: 'pointer',
-                      fontSize: 13,
-                    }}
-                  >
-                    Revoke
-                  </button>
-                </td>
+        <div className="mt-6 overflow-hidden rounded-lg border border-border bg-surface">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border bg-surface-2/50 text-left text-xs uppercase tracking-wide text-text-muted">
+                <th className="px-4 py-3 font-medium">Label</th>
+                <th className="px-4 py-3 font-medium">Created</th>
+                <th className="px-4 py-3 font-medium">Last used</th>
+                <th className="px-4 py-3 font-medium text-right">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {tokens.map((t) => (
+                <tr key={t.id} className="border-t border-border first:border-t-0">
+                  <td className="px-4 py-3">{t.label}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-text-muted">
+                    {new Date(t.createdAt).toLocaleString()}
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap text-text-muted">
+                    {t.lastUsedAt
+                      ? new Date(t.lastUsedAt).toLocaleString()
+                      : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onRevoke(t.id)}
+                      className="rounded border border-danger-soft px-3 py-1 text-sm text-danger hover:bg-danger-soft/30"
+                    >
+                      Revoke
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </>
   );
 }
-
-const th = { padding: '0.5rem 0.75rem', fontWeight: 500 } as const;
-const td = { padding: '0.5rem 0.75rem' } as const;

@@ -44,6 +44,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           <nav style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
             {session?.user ? (
               <>
+                <Link href="/rides" style={navLink}>
+                  Rides
+                </Link>
+                <Link href="/bump-map" style={navLink}>
+                  Bump map
+                </Link>
                 <Link href="/settings/tokens" style={navLink}>
                   iOS tokens
                 </Link>

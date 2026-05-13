@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { auth, signOut } from '@/auth';
+import { ThemeInit } from '@/components/ThemeInit';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -12,7 +14,10 @@ export const metadata: Metadata = {
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const session = await auth();
   return (
-    <html lang="en" className="bg-bg text-text">
+    <html lang="en" data-theme="system" className="bg-bg text-text">
+      <head>
+        <ThemeInit />
+      </head>
       <body className="min-h-screen antialiased">
         <header className="sticky top-0 z-10 border-b border-border bg-surface/90 backdrop-blur">
           <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
@@ -49,6 +54,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <span className="hidden text-text-muted sm:inline">
                     {session.user.email}
                   </span>
+                  <ThemeToggle />
                   <form
                     action={async () => {
                       'use server';
@@ -71,6 +77,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <Link href="/signup" className="text-accent hover:underline">
                     Sign up
                   </Link>
+                  <ThemeToggle />
                 </>
               )}
             </nav>

@@ -21,6 +21,10 @@ export const users = pgTable('users', {
   emailVerified: timestamp('email_verified', { withTimezone: true }),
   image: text('image'),
   passwordHash: text('password_hash'),
+  // Off-by-default opt-in to the global aggregated /map. Toggled via
+  // /api/me/sharing, which also backfills / subtracts the user's
+  // bump_cells contribution to keep the aggregate consistent.
+  shareToPublicMap: boolean('share_to_public_map').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

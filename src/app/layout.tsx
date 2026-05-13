@@ -42,16 +42,22 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             BumpyRide
           </Link>
           <nav style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+            <Link href="/map" style={navLink}>
+              Public map
+            </Link>
             {session?.user ? (
               <>
                 <Link href="/rides" style={navLink}>
                   Rides
                 </Link>
                 <Link href="/bump-map" style={navLink}>
-                  Bump map
+                  My bump map
                 </Link>
                 <Link href="/settings/tokens" style={navLink}>
                   iOS tokens
+                </Link>
+                <Link href="/settings/privacy" style={navLink}>
+                  Privacy
                 </Link>
                 <span style={{ color: '#9a9aac', fontSize: 14 }}>
                   {session.user.email}

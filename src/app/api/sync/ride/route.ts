@@ -81,13 +81,14 @@ export async function POST(req: NextRequest) {
       { status: 401 },
     );
   }
-  const userId = await lookupTokenUser(bearer);
-  if (!userId) {
+  const tokenLookup = await lookupTokenUser(bearer);
+  if (!tokenLookup) {
     return NextResponse.json(
       { error: 'invalid bearer token' },
       { status: 401 },
     );
   }
+  const { userId, shareToPublicMap } = tokenLookup;
 
   let payload: RidePayload;
   try {
@@ -224,20 +225,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    for (const d of deltas.values()) {
-      if (d.sumDelta === 0 && d.countDelta === 0) continue;
-      await client.query(
-        `INSERT INTO bump_cells (ix, iy, sum, count) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (ix, iy) DO UPDATE
-           SET sum = bump_cells.sum + EXCLUDED.sum,
-               count = bump_cells.count + EXCLUDED.count`,
-        [d.ix, d.iy, d.sumDelta, d.countDelta],
-      );
+    // Only contribute to the global aggregate when the user has opted in
+    // to public sharing. Toggling the preference later backfills or
+    // subtracts the user's contributions, so the invariant
+    //   bump_cells = SUM of ride_points belonging to opted-in users
+    // holds at all times. See /api/me/sharing.
+    if (shareToPublicMap) {
+      for (const d of deltas.values()) {
+        if (d.sumDelta === 0 && d.countDelta === 0) continue;
+        await client.query(
+          `INSERT INTO bump_cells (ix, iy, sum, count) VALUES ($1, $2, $3, $4)
+           ON CONFLICT (ix, iy) DO UPDATE
+             SET sum = bump_cells.sum + EXCLUDED.sum,
+                 count = bump_cells.count + EXCLUDED.count`,
+          [d.ix, d.iy, d.sumDelta, d.countDelta],
+        );
+      }
+      // A re-upload whose new points avoid a previously-touched cell can
+      // drive that cell's running count to zero; drop those rows so the
+      // public map doesn't keep emitting empty cells.
+      await client.query('DELETE FROM bump_cells WHERE count <= 0');
     }
-    // A re-upload whose new points avoid a previously-touched cell can drive
-    // that cell's running count to zero; drop those rows so the public map
-    // doesn't keep emitting empty cells.
-    await client.query('DELETE FROM bump_cells WHERE count <= 0');
 
     await client.query('COMMIT');
 

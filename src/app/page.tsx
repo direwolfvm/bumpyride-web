@@ -7,8 +7,19 @@ export default async function Home() {
     <div style={{ maxWidth: 640 }}>
       <h1 style={{ marginTop: 0 }}>BumpyRide</h1>
       <p>
-        Companion web app for the BumpyRide iOS app. Mirror your rides, view
-        routes, and see the global aggregated bump map.
+        Companion web app for the{' '}
+        <a
+          href="https://github.com/direwolfvm/bumpyride"
+          style={{ color: '#9bb4ff' }}
+        >
+          BumpyRide iOS app
+        </a>
+        . Browse your synced rides, see a per-user heat map of road
+        roughness, and explore the{' '}
+        <Link href="/map" style={{ color: '#9bb4ff' }}>
+          public bump map
+        </Link>{' '}
+        contributed by consenting riders.
       </p>
       {session?.user ? (
         <ul>
@@ -23,6 +34,13 @@ export default async function Home() {
             <Link href="/bump-map" style={{ color: '#9bb4ff' }}>
               bump map
             </Link>
+          </li>
+          <li>
+            Decide whether your rides contribute to the{' '}
+            <Link href="/settings/privacy" style={{ color: '#9bb4ff' }}>
+              public bump map
+            </Link>{' '}
+            (off by default)
           </li>
           <li>
             Manage{' '}
@@ -40,19 +58,14 @@ export default async function Home() {
           <Link href="/signup" style={{ color: '#9bb4ff' }}>
             create an account
           </Link>{' '}
-          to get started.
+          to start syncing your rides from the iOS app — or jump straight
+          to the{' '}
+          <Link href="/map" style={{ color: '#9bb4ff' }}>
+            public bump map
+          </Link>
+          .
         </p>
       )}
-      <h2>API</h2>
-      <ul>
-        <li>
-          <code>GET /api/health</code> — liveness check
-        </li>
-        <li>
-          <code>POST /api/sync/ride</code> — accepts a single ride payload
-          (Bearer-authenticated; tokens issued at <code>/settings/tokens</code>)
-        </li>
-      </ul>
     </div>
   );
 }

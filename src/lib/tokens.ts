@@ -20,24 +20,33 @@ export function hashApiToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
+export type TokenLookup = {
+  userId: string;
+  shareToPublicMap: boolean;
+};
+
 /**
- * Look up the user that owns the given bearer token, and stamp `last_used_at`.
+ * Look up the user that owns the given bearer token, stamp `last_used_at`,
+ * and return their public-sharing preference (so the sync handler can decide
+ * whether to write to `bump_cells` without a second DB round-trip).
  * Returns null if the token is unknown.
- *
- * Uses the raw `pool` rather than the drizzle proxy because it's on the hot
- * path of every ride sync.
  */
-export async function lookupTokenUser(token: string): Promise<string | null> {
+export async function lookupTokenUser(token: string): Promise<TokenLookup | null> {
   if (!token.startsWith(TOKEN_PREFIX)) return null;
   const hash = hashApiToken(token);
-  const res = await pool.query<{ user_id: string }>(
-    `UPDATE api_tokens
-        SET last_used_at = now()
-      WHERE token_hash = $1
-      RETURNING user_id`,
+  const res = await pool.query<{ user_id: string; share_to_public_map: boolean }>(
+    `WITH t AS (
+       UPDATE api_tokens SET last_used_at = now()
+         WHERE token_hash = $1
+       RETURNING user_id
+     )
+     SELECT t.user_id, u.share_to_public_map
+       FROM t JOIN users u ON u.id = t.user_id`,
     [hash],
   );
-  return res.rows[0]?.user_id ?? null;
+  const row = res.rows[0];
+  if (!row) return null;
+  return { userId: row.user_id, shareToPublicMap: row.share_to_public_map };
 }
 
 export function parseBearer(authorization: string | null): string | null {

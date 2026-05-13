@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 import { pool } from '@/db';
 import { rideSchema, type RidePayload } from '@/lib/ride-schema';
 import { gridIndex } from '@/lib/bump-grid';
+import { lookupTokenUser, parseBearer } from '@/lib/tokens';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -73,6 +74,21 @@ function summarize(payload: RidePayload) {
 }
 
 export async function POST(req: NextRequest) {
+  const bearer = parseBearer(req.headers.get('authorization'));
+  if (!bearer) {
+    return NextResponse.json(
+      { error: 'missing bearer token' },
+      { status: 401 },
+    );
+  }
+  const userId = await lookupTokenUser(bearer);
+  if (!userId) {
+    return NextResponse.json(
+      { error: 'invalid bearer token' },
+      { status: 401 },
+    );
+  }
+
   let payload: RidePayload;
   try {
     const raw = await req.json();
@@ -103,11 +119,21 @@ export async function POST(req: NextRequest) {
   try {
     await client.query('BEGIN');
 
-    const existing = await client.query<{ ride_uuid: string }>(
-      'SELECT ride_uuid FROM rides WHERE ride_uuid = $1 FOR UPDATE',
+    const existing = await client.query<{ ride_uuid: string; user_id: string }>(
+      'SELECT ride_uuid, user_id FROM rides WHERE ride_uuid = $1 FOR UPDATE',
       [payload.id],
     );
     const isUpdate = existing.rows.length > 0;
+    if (isUpdate && existing.rows[0].user_id !== userId) {
+      // ride_uuid is universally unique by construction (UUID v4 in the iOS
+      // app), so this collision implies a replay attempt; deny rather than
+      // overwrite the legitimate owner's ride.
+      await client.query('ROLLBACK');
+      return NextResponse.json(
+        { error: 'ride owned by another user' },
+        { status: 409 },
+      );
+    }
 
     const deltas = new Map<string, CellDelta>();
 
@@ -160,9 +186,10 @@ export async function POST(req: NextRequest) {
         `INSERT INTO rides (
            ride_uuid, user_id, title, started_at, ended_at, pocket_mode,
            schema_version, point_count, distance_m, max_bumpiness, avg_bumpiness
-         ) VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           payload.id,
+          userId,
           payload.title,
           payload.startedAt,
           payload.endedAt,

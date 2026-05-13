@@ -9,14 +9,16 @@ Two feature sets:
 
 Synchronisation with the iOS app is over a REST API; the on-disk JSON format the iOS app writes (see [`bumpy-ride/BumpyRide/docs/SCHEMA.md`](../../bumpy-ride/BumpyRide/docs/SCHEMA.md)) is also the wire format here.
 
-## Status — Phase 1
+## Status — Phase 2
 
-Scaffolding only. What works today:
+Auth + iOS sync tokens. What works today:
 
-- `GET /api/health` — liveness + DB ping
-- `POST /api/sync/ride` — accepts one schema-compliant ride, upserts by `Ride.id`, incrementally updates the global `bump_cells` aggregate. **No auth yet** — the endpoint is open in this phase.
+- **Web**: `/signup`, `/login`, sign-out. Credentials (email + bcrypt password) and Google OAuth.
+- **iOS tokens**: `/settings/tokens` to issue / list / revoke per-device tokens. Plaintext shown once at creation; only the sha256 is stored.
+- **`GET /api/health`** — liveness + DB ping.
+- **`POST /api/sync/ride`** — now requires `Authorization: Bearer <token>`. Rides scoped to the token's user. A ride UUID owned by a different user returns 409.
 
-Phase 2 will add auth (Auth.js with email/password + Google, plus per-user API tokens for the iOS app). Phase 3 the web UI. Phase 4 the public bump-map tile renderer.
+Phase 3 will build the web UI for browsing rides and viewing routes / per-user bump map. Phase 4 the public aggregated bump-map tile renderer.
 
 ## Stack
 
@@ -26,6 +28,7 @@ Phase 2 will add auth (Auth.js with email/password + Google, plus per-user API t
 | DB | Postgres 16 (Cloud SQL in production, container locally) |
 | Query layer | Drizzle ORM + `pg` |
 | Validation | Zod |
+| Auth | Auth.js v5 (Credentials + Google), JWT sessions, `@auth/drizzle-adapter`, `bcryptjs` |
 | Deploy | Docker image → Cloud Run (`bumpyride-web` service) on push to `main` |
 
 ## Local development
@@ -78,14 +81,36 @@ bumpyride-web/
 
 ## API
 
+### `POST /api/auth/signup`
+
+Email + password registration. Returns `{ id, email }` on success, `409` if the email is taken, `400` with zod issues otherwise.
+
+### Auth.js routes — `/api/auth/*`
+
+Standard Auth.js v5 handler. Useful endpoints:
+
+- `GET /api/auth/csrf` — CSRF token (cookie + JSON)
+- `POST /api/auth/callback/credentials` — sign in with email + password (form-encoded, requires `csrfToken`)
+- `GET /api/auth/signin/google` — start Google OAuth (only if `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` are set)
+- `POST /api/auth/signout` — clear session
+
+### `/api/tokens` — iOS sync token management (session-authed)
+
+- `GET` → `{ tokens: [{ id, label, createdAt, lastUsedAt }] }`
+- `POST` `{ label }` → `{ id, label, createdAt, token }` — `token` is the **plaintext** shown exactly once
+- `DELETE` `?id=<uuid>` → `{ id }`
+
+Tokens are `br_` + 32 random bytes (base64url). Only the sha256 is stored. Use them as `Authorization: Bearer <token>` on `/api/sync/ride`.
+
 ### `POST /api/sync/ride`
 
-Accepts one `Ride` object (see [`SCHEMA.md`](../../bumpy-ride/BumpyRide/docs/SCHEMA.md)). Idempotent by `Ride.id` — re-uploading the same ride replaces its points and reconciles the global bump-cell aggregate.
+Accepts one `Ride` object (see [`SCHEMA.md`](../../bumpy-ride/BumpyRide/docs/SCHEMA.md)). **Requires** `Authorization: Bearer <token>`. Idempotent by `Ride.id` — re-uploading the same ride replaces its points and reconciles the global bump-cell aggregate.
 
 **Request**
 
 ```http
 POST /api/sync/ride
+Authorization: Bearer br_...
 Content-Type: application/json
 
 {
@@ -103,18 +128,21 @@ Content-Type: application/json
 
 - `200` `{ id, updated, pointCount, distanceM, avgBumpiness, maxBumpiness }`
 - `400` validation failure — body returns the zod `issues` array
+- `401` missing or invalid bearer token
+- `409` ride UUID already owned by a different user
 - `503` from `/api/health` when the DB is unreachable
 
 `schemaVersion` is checked against a hard allow-list (currently `[1]`) per SCHEMA.md's forward-compat rule.
 
 ## Data model
 
-See [`migrations/0001_init.sql`](migrations/0001_init.sql). Key points:
+See [`migrations/0001_init.sql`](migrations/0001_init.sql) and [`migrations/0002_auth.sql`](migrations/0002_auth.sql). Key points:
 
-- `rides.ride_uuid` is the iOS `Ride.id` — the upsert / dedup key.
+- `rides.ride_uuid` is the iOS `Ride.id` — the upsert / dedup key. `rides.user_id` is `NOT NULL`.
 - `ride_points` stores everything from `RidePoint`, including `accel_window` as `real[]`.
 - `bump_cells` is the global aggregate (`sum`, `count` per `(ix, iy)`). Indices are anchored to `referenceLatitude = 38.9` so they match the iOS `BumpGrid` exactly.
-- `users` and `api_tokens` are present but unused in Phase 1.
+- `users`, `accounts`, `sessions`, `verification_tokens` are the Auth.js Drizzle-adapter tables. `users.password_hash` is bcrypt; OAuth-only users have it `NULL`.
+- `api_tokens.token_hash` is sha256 hex of the plaintext.
 
 `rides.distance_m`, `max_bumpiness`, `avg_bumpiness` are denormalised on write so the rides-list view doesn't need to scan `ride_points`.
 
@@ -124,10 +152,11 @@ The `bumpyride-web` Cloud Run service already builds from this repo on push to `
 
 1. **Cloud SQL Postgres instance** — provision a Postgres 16 instance in the same region as the Cloud Run service. Note its connection name `PROJECT:REGION:INSTANCE`.
 2. **Connect the service to Cloud SQL** — in the Cloud Run service settings, add the Cloud SQL connection. This mounts the Unix socket at `/cloudsql/PROJECT:REGION:INSTANCE`.
-3. **Secrets** — store the DB password in Secret Manager and reference it as an env var. Set `DATABASE_URL` on the service in the form:
-   ```
-   postgres://USER:PASSWORD@/bumpyride?host=/cloudsql/PROJECT:REGION:INSTANCE
-   ```
-4. **Migrations** — run `node scripts/migrate.mjs` against the Cloud SQL instance before promoting a deploy that introduces a new migration. Easiest path: a one-off Cloud Run Job using the same image, with the same `DATABASE_URL` and Cloud SQL connection, command `node scripts/migrate.mjs`.
-
-Phase 2 will introduce additional env vars (`AUTH_SECRET`, Google OAuth client id/secret) which should also live in Secret Manager.
+3. **Secrets** — store these in Secret Manager and reference them as env vars on the Cloud Run service:
+   - `DATABASE_URL` — `postgres://USER:PASSWORD@/bumpyride?host=/cloudsql/PROJECT:REGION:INSTANCE`
+   - `AUTH_SECRET` — `openssl rand -base64 32`
+   - `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` — OAuth client credentials from [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials). Create a **Web application** OAuth client and add `<service-url>/api/auth/callback/google` as an authorised redirect URI.
+4. **Non-secret env** on the service:
+   - `AUTH_URL` — the public URL of the service (e.g. `https://bumpyride-web-xxx.run.app`). Auth.js uses this to build OAuth callback URLs.
+   - `AUTH_TRUST_HOST=true` — required when running behind Cloud Run's proxy.
+5. **Migrations** — run `node scripts/migrate.mjs` against the Cloud SQL instance before promoting a deploy that introduces a new migration. Easiest path: a one-off Cloud Run Job using the same image, with the same `DATABASE_URL` and Cloud SQL connection, command `node scripts/migrate.mjs`.

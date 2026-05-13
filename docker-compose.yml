@@ -31,6 +31,11 @@ services:
     environment:
       DATABASE_URL: postgres://bumpyride:bumpyride@postgres:5432/bumpyride
       PORT: 8080
+      AUTH_SECRET: ${AUTH_SECRET:-dev-only-secret-replace-me-with-openssl-rand-base64-32}
+      AUTH_TRUST_HOST: "true"
+      AUTH_URL: http://localhost:8080
+      AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID:-}
+      AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

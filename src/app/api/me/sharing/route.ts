@@ -1,24 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ZodError, z } from 'zod';
-import { auth } from '@/auth';
 import { pool } from '@/db';
 import { CELL_LAT_DEG, CELL_LON_DEG } from '@/lib/bump-grid';
+import { getRequestUserId } from '@/lib/request-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+// Both methods accept either a web session cookie or a Bearer API token,
+// so the iOS app can read + write the user's privacy preference using the
+// same token it uses for ride sync. Last-write-wins between iOS and web;
+// the operation is idempotent on state.
 
 const patchSchema = z.object({
   shareToPublicMap: z.boolean(),
 });
 
-export async function GET() {
-  const session = await auth();
-  if (!session?.user?.id) {
+export async function GET(req: NextRequest) {
+  const userId = await getRequestUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
   const res = await pool.query<{ share_to_public_map: boolean }>(
     'SELECT share_to_public_map FROM users WHERE id = $1',
-    [session.user.id],
+    [userId],
   );
   return NextResponse.json({
     shareToPublicMap: res.rows[0]?.share_to_public_map ?? false,
@@ -26,8 +31,8 @@ export async function GET() {
 }
 
 export async function PATCH(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const userId = await getRequestUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
 
@@ -58,7 +63,7 @@ export async function PATCH(req: NextRequest) {
 
     const current = await client.query<{ share_to_public_map: boolean }>(
       'SELECT share_to_public_map FROM users WHERE id = $1 FOR UPDATE',
-      [session.user.id],
+      [userId],
     );
     const wasOptedIn = current.rows[0]?.share_to_public_map ?? false;
 
@@ -69,7 +74,7 @@ export async function PATCH(req: NextRequest) {
 
     await client.query(
       'UPDATE users SET share_to_public_map = $1 WHERE id = $2',
-      [body.shareToPublicMap, session.user.id],
+      [body.shareToPublicMap, userId],
     );
 
     if (body.shareToPublicMap) {
@@ -91,7 +96,7 @@ export async function PATCH(req: NextRequest) {
          ON CONFLICT (ix, iy) DO UPDATE
            SET sum   = bump_cells.sum   + EXCLUDED.sum,
                count = bump_cells.count + EXCLUDED.count`,
-        [session.user.id],
+        [userId],
       );
     } else {
       // Opting out: subtract the user's contributions from bump_cells.
@@ -113,7 +118,7 @@ export async function PATCH(req: NextRequest) {
            FROM user_cells
           WHERE bump_cells.ix = user_cells.ix
             AND bump_cells.iy = user_cells.iy`,
-        [session.user.id],
+        [userId],
       );
       await client.query('DELETE FROM bump_cells WHERE count <= 0');
     }

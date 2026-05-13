@@ -92,6 +92,10 @@ Seamless pairing target for the iOS app's **Sign in with bumpyride.me** button (
 
 Identity probe for bearer-authenticated callers (iOS). Returns `{ id, email, name }` on 200, `401` on missing / revoked token.
 
+### `GET` / `PATCH /api/me/sharing`
+
+Read and write the user's public-bump-map opt-in. Accepts **either** a Bearer token (iOS) or a web session cookie — the iOS app uses its existing sync token to sync the toggle, so changes from either client are immediately reflected on the other. `PATCH` to flip the value atomically backfills (on → adds the user's rides to `bump_cells`) or subtracts (off → removes them); response is `{ shareToPublicMap, changed }`. Default is `false`.
+
 ### `POST /api/auth/signup`
 
 Email + password registration. Returns `{ id, email }` on success, `409` if the email is taken, `400` with zod issues otherwise.

@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bumpyride
+      POSTGRES_PASSWORD: bumpyride
+      POSTGRES_DB: bumpyride
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bumpyride -d bumpyride"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: .
+    command: node scripts/migrate.mjs
+    environment:
+      DATABASE_URL: postgres://bumpyride:bumpyride@postgres:5432/bumpyride
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://bumpyride:bumpyride@postgres:5432/bumpyride
+      PORT: 8080
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:

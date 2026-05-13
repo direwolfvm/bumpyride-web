@@ -22,28 +22,42 @@ const COLOR_STOPS: ReadonlyArray<{ value: number; rgb: readonly [number, number,
   { value: 2.0, rgb: [170, 0, 221] },   // purple
 ];
 
+// Per-cell alpha applied at fill time so the basemap shows through, matching
+// the iOS app's `tileFillAlpha = 0.78`. The MapLibre raster layer keeps
+// `raster-opacity: 1.0` so the in-tile alpha is the only attenuation —
+// otherwise the glow halo gets crushed below visibility.
+const CELL_FILL_ALPHA = 0.78;
+
+// Two-layer purple halo matching the iOS BumpMapTileOverlay exactly:
+//   outer  = UIColor(red: 0.55, green: 0.18, blue: 0.95, alpha: 0.78), blur 22
+//   inner  = UIColor(red: 0.85, green: 0.50, blue: 1.00, alpha: 1.00), blur 7
+const GLOW_OUTER_COLOR = 'rgba(140, 46, 242, 0.78)';
+const GLOW_OUTER_BLUR = 22;
+const GLOW_INNER_COLOR = 'rgba(217, 128, 255, 1.0)';
+const GLOW_INNER_BLUR = 7;
+
 function colorFor(value: number): string {
   const first = COLOR_STOPS[0];
   const last = COLOR_STOPS[COLOR_STOPS.length - 1];
-  if (value <= first.value) return rgb(first.rgb);
-  if (value >= last.value) return rgb(last.rgb);
+  if (value <= first.value) return rgba(first.rgb);
+  if (value >= last.value) return rgba(last.rgb);
   for (let i = 0; i < COLOR_STOPS.length - 1; i++) {
     const a = COLOR_STOPS[i];
     const b = COLOR_STOPS[i + 1];
     if (value <= b.value) {
       const t = (value - a.value) / (b.value - a.value);
-      return rgb([
+      return rgba([
         Math.round(a.rgb[0] + (b.rgb[0] - a.rgb[0]) * t),
         Math.round(a.rgb[1] + (b.rgb[1] - a.rgb[1]) * t),
         Math.round(a.rgb[2] + (b.rgb[2] - a.rgb[2]) * t),
       ]);
     }
   }
-  return rgb([128, 128, 128]);
+  return rgba([128, 128, 128]);
 }
 
-function rgb(c: readonly [number, number, number]): string {
-  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+function rgba(c: readonly [number, number, number]): string {
+  return `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${CELL_FILL_ALPHA})`;
 }
 
 // Web Mercator. Tile (z, x, y) → lon/lat of NW + SE corners.
@@ -123,7 +137,10 @@ export function renderTile(
   const canvas = createCanvas(TILE_SIZE, TILE_SIZE);
   const ctx = canvas.getContext('2d');
 
-  // Precompute each cell's pixel rect on this tile.
+  // Precompute each cell's pixel rect on this tile. When the natural cell
+  // size falls below 1 px (low zoom), enforce a 1 px floor centred on the
+  // cell's geometric centre — matching iOS — so the rect doesn't drift
+  // toward one corner as zoom changes.
   type Rect = { px: number; py: number; w: number; h: number; avg: number };
   const rects: Rect[] = [];
   for (const c of cells) {
@@ -143,11 +160,15 @@ export function renderTile(
       origin.lon + CELL_LON_DEG,
       origin.lat,
     );
+    const cx = (tl.x + br.x) / 2;
+    const cy = (tl.y + br.y) / 2;
+    const w = Math.max(1, br.x - tl.x);
+    const h = Math.max(1, br.y - tl.y);
     rects.push({
-      px: tl.x,
-      py: tl.y,
-      w: Math.max(1, br.x - tl.x),
-      h: Math.max(1, br.y - tl.y),
+      px: cx - w / 2,
+      py: cy - h / 2,
+      w,
+      h,
       avg: c.sum / c.count,
     });
   }
@@ -156,15 +177,15 @@ export function renderTile(
   // Pass 1 — glow. Two shadow passes (wide soft aura + tight bright core)
   // on a single path containing every cell rect, matching the iOS look.
   ctx.save();
-  ctx.shadowColor = 'rgba(180, 80, 255, 0.55)';
-  ctx.shadowBlur = 22;
-  ctx.fillStyle = 'rgba(180, 80, 255, 0.55)';
+  ctx.shadowColor = GLOW_OUTER_COLOR;
+  ctx.shadowBlur = GLOW_OUTER_BLUR;
+  ctx.fillStyle = GLOW_OUTER_COLOR;
   ctx.beginPath();
   for (const r of rects) ctx.rect(r.px, r.py, r.w, r.h);
   ctx.fill();
-  ctx.shadowColor = 'rgba(180, 80, 255, 0.95)';
-  ctx.shadowBlur = 7;
-  ctx.fillStyle = 'rgba(180, 80, 255, 0.95)';
+  ctx.shadowColor = GLOW_INNER_COLOR;
+  ctx.shadowBlur = GLOW_INNER_BLUR;
+  ctx.fillStyle = GLOW_INNER_COLOR;
   ctx.beginPath();
   for (const r of rects) ctx.rect(r.px, r.py, r.w, r.h);
   ctx.fill();

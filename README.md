@@ -9,16 +9,17 @@ Two feature sets:
 
 Synchronisation with the iOS app is over a REST API; the on-disk JSON format the iOS app writes (see [`bumpy-ride/BumpyRide/docs/SCHEMA.md`](../../bumpy-ride/BumpyRide/docs/SCHEMA.md)) is also the wire format here.
 
-## Status — Phase 2
+## Status — Phase 3
 
-Auth + iOS sync tokens. What works today:
+Authenticated web UI is live. What works today:
 
-- **Web**: `/signup`, `/login`, sign-out. Credentials (email + bcrypt password) and Google OAuth.
+- **Web**: `/signup`, `/login`, sign-out (Credentials + Google).
+- **Rides browser**: `/rides` (paginated list), `/rides/[id]` (route on a MapLibre map with bumpiness-gradient polyline, bumpiness-over-time chart, inline rename).
+- **Per-user bump map**: `/bump-map` — server-rendered raster tiles aggregating the user's `ride_points` on demand. Renderer mirrors the iOS `BumpMapTileOverlay` (two-pass purple glow + 20 ft colored cells).
 - **iOS tokens**: `/settings/tokens` to issue / list / revoke per-device tokens. Plaintext shown once at creation; only the sha256 is stored.
-- **`GET /api/health`** — liveness + DB ping.
-- **`POST /api/sync/ride`** — now requires `Authorization: Bearer <token>`. Rides scoped to the token's user. A ride UUID owned by a different user returns 409.
+- **API**: `/api/health`, `/api/me` (Bearer), `/api/sync/ride` (Bearer, user-scoped, 409 on cross-user UUID collision), `/api/tokens` (session), `/api/rides/[id]` (session, PATCH rename), `/api/tiles/user/[z]/[x]/[y]` (session, PNG).
 
-Phase 3 will build the web UI for browsing rides and viewing routes / per-user bump map. Phase 4 the public aggregated bump-map tile renderer.
+Phase 4 will build the **public aggregated bump-map** — anonymous tile endpoint that reads from the maintained `bump_cells` table (no routes, no timestamps, no PII).
 
 ## Stack
 
@@ -29,6 +30,7 @@ Phase 3 will build the web UI for browsing rides and viewing routes / per-user b
 | Query layer | Drizzle ORM + `pg` |
 | Validation | Zod |
 | Auth | Auth.js v5 (Credentials + Google), JWT sessions, `@auth/drizzle-adapter`, `bcryptjs` |
+| Maps | MapLibre GL JS (client) + Carto Positron basemap; server-rendered raster tiles via `@napi-rs/canvas` |
 | Deploy | Docker image → Cloud Run (`bumpyride-web` service) on push to `main` |
 
 ## Local development

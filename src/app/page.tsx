@@ -11,14 +11,26 @@ export default async function Home() {
         routes, and see the global aggregated bump map.
       </p>
       {session?.user ? (
-        <p>
-          Signed in as <strong>{session.user.email}</strong>. Manage your iOS
-          sync tokens at{' '}
-          <Link href="/settings/tokens" style={{ color: '#9bb4ff' }}>
-            /settings/tokens
-          </Link>
-          .
-        </p>
+        <ul>
+          <li>
+            Browse your{' '}
+            <Link href="/rides" style={{ color: '#9bb4ff' }}>
+              rides
+            </Link>
+          </li>
+          <li>
+            See your aggregated{' '}
+            <Link href="/bump-map" style={{ color: '#9bb4ff' }}>
+              bump map
+            </Link>
+          </li>
+          <li>
+            Manage{' '}
+            <Link href="/settings/tokens" style={{ color: '#9bb4ff' }}>
+              iOS sync tokens
+            </Link>
+          </li>
+        </ul>
       ) : (
         <p>
           <Link href="/login" style={{ color: '#9bb4ff' }}>

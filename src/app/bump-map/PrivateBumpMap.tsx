@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { basemapStyleForCurrentTheme } from '@/lib/map-style';
 
 export function PrivateBumpMap({
   minLat,
@@ -23,7 +24,7 @@ export function PrivateBumpMap({
 
     const map = new maplibregl.Map({
       container: el,
-      style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+      style: basemapStyleForCurrentTheme(),
       bounds: [
         [minLon, minLat],
         [maxLon, maxLat],

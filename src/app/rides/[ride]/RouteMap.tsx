@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { basemapStyleForCurrentTheme } from '@/lib/map-style';
 
 // Mirrors the iOS bumpiness colour stops so the route on the web looks like
 // the route on the device. Kept in sync with src/lib/tile-renderer.ts.
@@ -56,7 +57,7 @@ export function RouteMap({ samples }: { samples: Sample[] }) {
 
     const map = new maplibregl.Map({
       container: el,
-      style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+      style: basemapStyleForCurrentTheme(),
       bounds: [
         [minLon, minLat],
         [maxLon, maxLat],

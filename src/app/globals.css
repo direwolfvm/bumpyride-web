@@ -2,7 +2,18 @@
 
 /* Project theme. Tailwind v4 reads design tokens from CSS variables in
    the @theme block; class names like `bg-surface`, `text-muted` resolve
-   to these. The palette is a polished take on the existing dark theme. */
+   to these. We default to the dark palette and override below for the
+   light theme via [data-theme] attribute on <html>.
+
+   Resolution rules:
+     html[data-theme="dark"]                                     → dark
+     html[data-theme="light"]                                    → light
+     html[data-theme="system"] + prefers-color-scheme: dark      → dark
+     html[data-theme="system"] + prefers-color-scheme: light     → light
+   layout.tsx ships data-theme="system" as the SSR default and a tiny
+   inline script promotes it to the user's stored preference before
+   paint so there's no flash of wrong theme. */
+
 @theme {
   --color-bg: #09090e;
   --color-surface: #101019;
@@ -28,17 +39,70 @@
     "Liberation Mono", monospace;
 }
 
-/* Base layer: small tweaks that apply everywhere. Most styling lives in
-   utility classes per component. */
+/* Explicit light theme. */
+html[data-theme="light"] {
+  --color-bg: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1f3f5;
+  --color-border: #e5e7eb;
+  --color-border-strong: #d1d5db;
+
+  --color-text: #18181b;
+  --color-text-muted: #525266;
+  --color-text-dim: #9ca3af;
+
+  --color-accent: #2563eb;
+  --color-accent-strong: #1d4ed8;
+  --color-accent-soft: #dbeafe;
+
+  --color-success: #15803d;
+  --color-danger: #dc2626;
+  --color-danger-soft: #fee2e2;
+}
+
+/* When the user hasn't picked a preference, follow the OS. */
+@media (prefers-color-scheme: light) {
+  html[data-theme="system"] {
+    --color-bg: #fafafa;
+    --color-surface: #ffffff;
+    --color-surface-2: #f1f3f5;
+    --color-border: #e5e7eb;
+    --color-border-strong: #d1d5db;
+
+    --color-text: #18181b;
+    --color-text-muted: #525266;
+    --color-text-dim: #9ca3af;
+
+    --color-accent: #2563eb;
+    --color-accent-strong: #1d4ed8;
+    --color-accent-soft: #dbeafe;
+
+    --color-success: #15803d;
+    --color-danger: #dc2626;
+    --color-danger-soft: #fee2e2;
+  }
+}
+
 @layer base {
   html,
   body {
     background: var(--color-bg);
     color: var(--color-text);
     font-family: var(--font-sans);
-    /* Slightly tighter line-height than the browser default; numbers and
-       data tables feel cramped at 1.6. */
     line-height: 1.5;
+  }
+
+  /* Smooth theme transitions on the elements that actually change. We
+     intentionally don't transition layout properties — only colour. */
+  body,
+  body * {
+    transition: background-color 150ms ease, border-color 150ms ease,
+      color 150ms ease;
+  }
+  /* …except the map, which has its own paint timing. */
+  .maplibregl-map,
+  .maplibregl-map * {
+    transition: none;
   }
 
   a {
@@ -48,7 +112,6 @@
     text-decoration: underline;
   }
 
-  /* Form controls inherit the page font so dark-on-dark inputs match. */
   input,
   textarea,
   button,
@@ -57,8 +120,6 @@
     color: inherit;
   }
 
-  /* MapLibre tile container needs a solid background so the basemap
-     loading state doesn't flash white on this dark theme. */
   .maplibregl-map {
     background: var(--color-surface);
   }

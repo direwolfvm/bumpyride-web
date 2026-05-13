@@ -3,9 +3,10 @@
 import { useState, type FormEvent } from 'react';
 import { signIn } from 'next-auth/react';
 
-export function SignupForm() {
+export function SignupForm({ next }: { next?: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const redirectTarget = next ?? '/';
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -38,7 +39,7 @@ export function SignupForm() {
       setError('Account created but sign-in failed. Try the login page.');
       return;
     }
-    window.location.href = '/';
+    window.location.href = redirectTarget;
   }
 
   return (
@@ -77,7 +78,7 @@ export function SignupForm() {
       <div style={dividerStyle}>or</div>
       <button
         type="button"
-        onClick={() => signIn('google', { callbackUrl: '/' })}
+        onClick={() => signIn('google', { callbackUrl: redirectTarget })}
         style={secondaryButton}
       >
         Continue with Google

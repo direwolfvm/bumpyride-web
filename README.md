@@ -9,17 +9,16 @@ Two feature sets:
 
 Synchronisation with the iOS app is over a REST API; the on-disk JSON format the iOS app writes (see the iOS repo's [`docs/SCHEMA.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/SCHEMA.md)) is also the wire format here. Seamless pairing is specified at [`docs/WEB_PAIRING.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/WEB_PAIRING.md) and implemented as `GET /ios-pair` on this side.
 
-## Status — Phase 3
+## Status — Phase 4
 
-Authenticated web UI is live. What works today:
+Public aggregated bump map shipped. What works today:
 
-- **Web**: `/signup`, `/login`, sign-out (Credentials + Google).
-- **Rides browser**: `/rides` (paginated list), `/rides/[id]` (route on a MapLibre map with bumpiness-gradient polyline, bumpiness-over-time chart, inline rename).
-- **Per-user bump map**: `/bump-map` — server-rendered raster tiles aggregating the user's `ride_points` on demand. Renderer mirrors the iOS `BumpMapTileOverlay` (two-pass purple glow + 20 ft colored cells).
-- **iOS tokens**: `/settings/tokens` to issue / list / revoke per-device tokens. Plaintext shown once at creation; only the sha256 is stored.
-- **API**: `/api/health`, `/api/me` (Bearer), `/api/sync/ride` (Bearer, user-scoped, 409 on cross-user UUID collision), `/api/tokens` (session), `/api/rides/[id]` (session, PATCH rename), `/api/tiles/user/[z]/[x]/[y]` (session, PNG).
-
-Phase 4 will build the **public aggregated bump-map** — anonymous tile endpoint that reads from the maintained `bump_cells` table (no routes, no timestamps, no PII).
+- **Public map**: `/map` — anonymous, no account required. Aggregates 20 ft cells across riders who've opted in. A cell only renders once it has ≥ `PUBLIC_BUMPMAP_MIN_COUNT` samples (default 3), so a single rider's solo route doesn't appear in public until reinforced.
+- **Per-user opt-in**: `/settings/privacy` — off by default. Toggle backfills (on) or subtracts (off) the user's contributions from the global `bump_cells` aggregate in a single transaction, keeping the invariant `bump_cells = SUM of ride_points belonging to opted-in users`.
+- **Authenticated UI** (from Phase 3): `/rides`, `/rides/[id]`, `/bump-map` (per-user), `/settings/tokens`.
+- **Web auth**: `/signup`, `/login`, sign-out (Credentials + Google).
+- **iOS pairing**: `/ios-pair` (seamless, ASWebAuthenticationSession) and `/settings/tokens` (paste-a-token fallback).
+- **API**: `/api/health`, `/api/me` (Bearer), `/api/me/sharing` (session, GET/PATCH), `/api/sync/ride` (Bearer; only writes to `bump_cells` for opted-in users), `/api/tokens` (session), `/api/rides/[id]` (session, PATCH rename), `/api/tiles/user/[z]/[x]/[y]` (session, PNG), `/api/tiles/public/[z]/[x]/[y]` (anonymous, PNG, applies the threshold).
 
 ## Stack
 

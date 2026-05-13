@@ -16,12 +16,12 @@ export async function GET(req: NextRequest) {
   if (!bearer) {
     return NextResponse.json({ error: 'missing bearer token' }, { status: 401 });
   }
-  const userId = await lookupTokenUser(bearer);
-  if (!userId) {
+  const tokenLookup = await lookupTokenUser(bearer);
+  if (!tokenLookup) {
     return NextResponse.json({ error: 'invalid bearer token' }, { status: 401 });
   }
   const user = await db.query.users.findFirst({
-    where: eq(users.id, userId),
+    where: eq(users.id, tokenLookup.userId),
     columns: { id: true, email: true, name: true },
   });
   if (!user) {

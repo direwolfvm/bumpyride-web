@@ -46,6 +46,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
               <span>BumpyRide</span>
             </Link>
             <nav className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+              <Link href="/about" className="text-accent hover:underline">
+                About
+              </Link>
               <Link href="/map" className="text-accent hover:underline">
                 Public map
               </Link>

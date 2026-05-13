@@ -81,6 +81,12 @@ bumpyride-web/
 
 ## API
 
+> **Integrating the iOS app?** See [`docs/IOS_INTEGRATION.md`](docs/IOS_INTEGRATION.md) for the full pairing flow, error semantics, and a reference Swift `SyncClient`.
+
+### `GET /api/me`
+
+Identity probe for bearer-authenticated callers (iOS). Returns `{ id, email, name }` on 200, `401` on missing / revoked token.
+
 ### `POST /api/auth/signup`
 
 Email + password registration. Returns `{ id, email }` on success, `409` if the email is taken, `400` with zod issues otherwise.

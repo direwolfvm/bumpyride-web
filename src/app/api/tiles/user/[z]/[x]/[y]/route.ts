@@ -25,7 +25,7 @@ const NOT_FOUND_TILE = (status = 200) =>
   new Response(new Uint8Array(emptyTilePng()), { status, headers: PNG_HEADERS });
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ z: string; x: string; y: string }> },
 ) {
   const session = await auth();
@@ -44,6 +44,12 @@ export async function GET(
   }
   if (z < 0 || z > 22) return NOT_FOUND_TILE(400);
 
+  // Optional filter: `?mode=mounted` drops pocket-mode and unknown-mode
+  // rides. Anything else (missing, or `mode=all`) shows every ride —
+  // matches the personal-map default of "everything you've recorded".
+  const mode = req.nextUrl.searchParams.get('mode');
+  const mountedOnly = mode === 'mounted';
+
   const bbox = tileQueryBbox(z, x, y);
 
   // Aggregate cells from this user's ride_points inside the bbox.
@@ -60,6 +66,7 @@ export async function GET(
     WHERE r.user_id = $1
       AND rp.latitude  BETWEEN $2 AND $3
       AND rp.longitude BETWEEN $4 AND $5
+      ${mountedOnly ? 'AND r.pocket_mode = FALSE' : ''}
     GROUP BY ix, iy
   `;
 

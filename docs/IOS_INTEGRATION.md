@@ -138,11 +138,13 @@ Body size note: a ride can be a few MB because of `accelWindow`. The server acce
 A ride contributes to the public bump map at `/map` iff **both** of these are true:
 
 1. The owning user has `shareToPublicMap = true` (toggled at `/settings/privacy`).
-2. The ride's `pocketMode` is **`false`** — that is, the phone was on a mounted, calibrated position.
+2. The ride's `pocketMode` is **not `true`** — that is, `false` (mounted) or `null` (legacy ride from before the field existed).
 
-Pocket-mode rides (`pocketMode: true`) and legacy rides without the field (`pocketMode: null` — recorded before the field existed) are always personal-only; their points stay in `/bump-map` for the rider but never reach `/map`. The framing is "the public map shows calibrated sensor data" — phone-on-body damping would muddy that signal.
+Pocket-mode rides (`pocketMode: true`) are always personal-only; their points stay in `/bump-map` for the rider but never reach `/map`. Legacy `null` rides bucket with mounted (early users overwhelmingly had handlebar mounts) — same rule as the iOS Bump Map's default filter.
 
-Toggling sharing on backfills only mounted-mode rides; toggling off subtracts only mounted-mode contributions (pocket-mode rides were never added). Re-uploading the same `Ride.id` with a changed `pocketMode` flips its eligibility — the server applies the correct delta in a single transaction.
+Toggling sharing on backfills eligible rides; toggling off subtracts them. Re-uploading the same `Ride.id` with a changed `pocketMode` flips eligibility — the server applies the correct delta in a single transaction.
+
+The per-user calibration (`/api/me/calibration`) currently only affects the rider's personal map. Pocket data isn't part of the public aggregate today, even when the rider has a confident gain; a future "include calibrated pocket data" public toggle may revisit this.
 
 iOS doesn't need to make any decisions here; just send the `pocketMode` value the way you record it, and the web will route the ride correctly.
 

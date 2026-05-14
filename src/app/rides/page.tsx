@@ -73,7 +73,7 @@ export default async function RidesListPage({
                 <th className="px-4 py-3 font-medium">Max bumpiness</th>
                 <th
                   className="px-4 py-3 font-medium"
-                  title="Whether the iOS app's 3 Hz body-bob filter was active during recording. Pocket-mode rides are damped and don't contribute to the public map."
+                  title="Whether the iOS app's 3 Hz body-bob filter was active during recording. Pocket-mode rides are damped and don't contribute to the public map; mounted and legacy rides do."
                 >
                   Pocket mode
                 </th>
@@ -153,11 +153,21 @@ export default async function RidesListPage({
 
 function PocketBadge({ value }: { value: boolean | null }) {
   // Each badge style hints what it means for the public aggregate:
-  //   off → contributes (calibrated, mounted sensor) → accent
-  //   on  → personal-only (damped) → muted
-  //   unknown → personal-only (legacy ride, sensing mode wasn't captured)
+  //   Off (mounted)       contributes → accent
+  //   On  (pocket)        personal-only (damped) → muted
+  //   —   (legacy null)   contributes too — bucketed with mounted, but the
+  //                       sensing mode wasn't captured, so we show an
+  //                       em-dash with a tooltip rather than a falsely
+  //                       confident "Off".
   if (value === null) {
-    return <span className="text-text-dim">—</span>;
+    return (
+      <span
+        className="text-text-dim"
+        title="Legacy ride — sensing mode wasn't captured. Treated as mounted for the public aggregate."
+      >
+        —
+      </span>
+    );
   }
   if (value === true) {
     return (

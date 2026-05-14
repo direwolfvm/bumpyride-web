@@ -3,7 +3,6 @@ import { ZodError } from 'zod';
 import { pool } from '@/db';
 import { rideSchema, type RidePayload } from '@/lib/ride-schema';
 import { gridIndex } from '@/lib/bump-grid';
-import { calibrationActive } from '@/lib/calibration';
 import { lookupTokenUser, parseBearer } from '@/lib/tokens';
 
 export const dynamic = 'force-dynamic';
@@ -30,24 +29,21 @@ type CellDelta = { ix: number; iy: number; sumDelta: number; countDelta: number 
 
 /**
  * Add or subtract a ride's points to the per-cell delta map.
- *
- *   sign: +1 to add the points, -1 to subtract.
- *   gain: per-bumpiness multiplier — 1.0 for mounted rides, the user's
- *         pocketGain for pocket-mode rides when their calibration is
- *         active (confidence >= 3). The gain only scales the cell sum;
- *         counts always step by ±1 regardless.
+ * `sign` is +1 to add the points, -1 to subtract. Pocket-mode rides
+ * don't contribute to the public aggregate today, so there's no gain
+ * multiplier here — the calibration lives in the personal-map SQL
+ * (see /api/tiles/user/...) instead.
  */
 function accumulateDeltas(
   deltas: Map<string, CellDelta>,
   points: { latitude: number; longitude: number; bumpiness: number }[],
   sign: 1 | -1,
-  gain = 1,
 ) {
   for (const p of points) {
     const { ix, iy } = gridIndex(p.latitude, p.longitude);
     const key = `${ix}:${iy}`;
     const existing = deltas.get(key);
-    const sumStep = sign * p.bumpiness * gain;
+    const sumStep = sign * p.bumpiness;
     if (existing) {
       existing.sumDelta += sumStep;
       existing.countDelta += sign;
@@ -100,13 +96,7 @@ export async function POST(req: NextRequest) {
       { status: 401 },
     );
   }
-  const { userId, shareToPublicMap, pocketGain, pocketConfidence } =
-    tokenLookup;
-  // When the rider's calibration meets the confidence threshold, pocket-
-  // mode samples are scaled by their pocketGain before they hit bump_cells.
-  // Otherwise pocket-mode rides are excluded from the public aggregate
-  // (we don't know how to convert them to mounted-equivalent).
-  const userCalibrated = calibrationActive(pocketConfidence);
+  const { userId, shareToPublicMap } = tokenLookup;
 
   let payload: RidePayload;
   try {
@@ -160,24 +150,23 @@ export async function POST(req: NextRequest) {
 
     // Public aggregate eligibility — a ride contributes to bump_cells if:
     //   - the user is opted in (shareToPublicMap), AND
-    //   - the ride is mounted-mode (pocketMode === false), OR
-    //     the ride is pocket-mode AND the user has calibration in effect.
-    // The applied gain per pocket-mode sample is the user's pocketGain;
-    // mounted-mode samples use raw bumpiness. Legacy pocket_mode = null
-    // rides are always excluded from the public aggregate (we don't know
-    // the sensing mode, so we can't trust the magnitude).
+    //   - the ride's pocket_mode is NOT TRUE (i.e. mounted OR legacy null).
+    // This mirrors the iOS Bump Map's default "Mounted" filter, which
+    // also buckets null with mounted (early users predating the field
+    // overwhelmingly had handlebar mounts).
+    //
+    // Pocket-mode rides never contribute to the public aggregate today —
+    // even calibrated ones. The per-rider calibration gain still applies
+    // on the personal map, but the public map is calibrated-mounted-only
+    // until we ship the "include calibrated pocket data" public toggle.
+    // See bumpyride/docs/SCHEMA.md (legacy-null handling) and the
+    // /docs/CALIBRATION.md / future-toggle notes.
     const oldPocketMode = isUpdate ? existing.rows[0].pocket_mode : null;
     const newPocketMode = payload.pocketMode ?? null;
-    const oldRideEligible =
-      shareToPublicMap &&
-      (oldPocketMode === false || (oldPocketMode === true && userCalibrated));
-    const newRideEligible =
-      shareToPublicMap &&
-      (newPocketMode === false || (newPocketMode === true && userCalibrated));
+    const oldRideEligible = shareToPublicMap && oldPocketMode !== true;
+    const newRideEligible = shareToPublicMap && newPocketMode !== true;
     const wasInPublic = isUpdate && oldRideEligible;
     const willBeInPublic = newRideEligible;
-    const oldGain = oldPocketMode === true ? pocketGain : 1;
-    const newGain = newPocketMode === true ? pocketGain : 1;
 
     const deltas = new Map<string, CellDelta>();
 
@@ -190,13 +179,13 @@ export async function POST(req: NextRequest) {
         'SELECT latitude, longitude, bumpiness FROM ride_points WHERE ride_uuid = $1',
         [payload.id],
       );
-      if (wasInPublic) accumulateDeltas(deltas, oldPoints.rows, -1, oldGain);
+      if (wasInPublic) accumulateDeltas(deltas, oldPoints.rows, -1);
       await client.query('DELETE FROM ride_points WHERE ride_uuid = $1', [
         payload.id,
       ]);
     }
 
-    if (willBeInPublic) accumulateDeltas(deltas, payload.points, +1, newGain);
+    if (willBeInPublic) accumulateDeltas(deltas, payload.points, +1);
 
     if (isUpdate) {
       await client.query(
@@ -277,15 +266,13 @@ export async function POST(req: NextRequest) {
     // so the loop below trivially handles every combination.
     //
     // The invariant we maintain:
-    //   bump_cells.sum   = SUM over (ride, point) s.t.
+    //   bump_cells.sum   = SUM of raw bumpiness over (ride, point) s.t.
     //                        user.share_to_public_map = TRUE
-    //                        AND (ride.pocket_mode = FALSE
-    //                             OR (ride.pocket_mode = TRUE
-    //                                 AND user.pocket_confidence >= 3))
-    //                      of bumpiness * effective_gain
-    //                      where effective_gain = pocket_gain for pocket
-    //                      samples (when calibration active), else 1.0.
-    //   bump_cells.count = SUM over the same (ride, point) of 1.
+    //                        AND ride.pocket_mode IS DISTINCT FROM TRUE
+    //                              (i.e. false or null)
+    //   bump_cells.count = number of those points
+    // Pocket-mode rides never contribute (calibration scaling is only
+    // applied to the rider's personal map — see /api/tiles/user/...).
     for (const d of deltas.values()) {
       if (d.sumDelta === 0 && d.countDelta === 0) continue;
       await client.query(

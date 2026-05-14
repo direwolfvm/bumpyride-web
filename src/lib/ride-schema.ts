@@ -5,7 +5,15 @@ import { z } from 'zod';
 
 // Versions we know how to ingest. SCHEMA.md tells consumers to refuse
 // versions they don't understand rather than silently accepting them.
-export const SUPPORTED_SCHEMA_VERSIONS = [1] as const;
+// v1: pre-pocket-detector. `accelWindow` was HPF-filtered for pocket rides;
+//     `bumpiness` was computed live at record time.
+// v2: iOS now records `accelWindow` raw regardless of mode, and derives
+//     `bumpiness` post-hoc based on the pocket tag (HPF'd RMS for pocket,
+//     raw RMS for mounted). Wire-format shape is identical; only the
+//     `accelWindow` content shifts. Aggregation is unaffected — we read
+//     `bumpiness` and apply the rider's calibration gain.
+// See bumpyride/docs/SCHEMA.md for the v1/v2 comparison.
+export const SUPPORTED_SCHEMA_VERSIONS = [1, 2] as const;
 
 const finite = z.number().refine(Number.isFinite, { message: 'must be finite' });
 

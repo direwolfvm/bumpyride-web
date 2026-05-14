@@ -195,7 +195,7 @@ For very large libraries you may want to throttle to a few rides per minute to b
 
 ### Schema version
 
-The server has a hard allow-list on `schemaVersion`. As of writing it only accepts `1`. When the iOS app bumps to `2`, the server must be updated first or it will reject every upload with `400`. Coordinate this transition through this repo.
+The server has a hard allow-list on `schemaVersion`. As of writing it accepts `[1, 2]`. `v2` is the current iOS-side format (raw `accelWindow` with `bumpiness` derived post-hoc — see the iOS-side [`docs/SCHEMA.md`](https://github.com/direwolfvm/bumpyride/blob/main/docs/SCHEMA.md) for the v1/v2 semantic comparison). `v1` is still accepted so older saved rides re-upload cleanly. When iOS bumps to `3`, coordinate the server allow-list update through this repo first; otherwise every upload returns `400`.
 
 ## Sample Swift sync client
 

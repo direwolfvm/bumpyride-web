@@ -147,7 +147,7 @@ Content-Type: application/json
 - `409` ride UUID already owned by a different user
 - `503` from `/api/health` when the DB is unreachable
 
-`schemaVersion` is checked against a hard allow-list (currently `[1]`) per SCHEMA.md's forward-compat rule.
+`schemaVersion` is checked against a hard allow-list (currently `[1, 2]`) per SCHEMA.md's forward-compat rule. `v2` is the current iOS-side format; `v1` is still accepted so older saved rides re-upload cleanly.
 
 ## Data model
 

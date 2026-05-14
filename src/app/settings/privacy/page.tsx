@@ -25,9 +25,14 @@ export default async function PrivacySettingsPage() {
   return (
     <div className="mx-auto max-w-3xl">
       <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-        Privacy
+        Public sharing
       </h1>
-      <h2 className="mt-6 text-sm font-medium uppercase tracking-wide text-text-muted">
+      <p className="mt-2 text-sm text-text-muted">
+        Per-account toggle that controls whether your rides contribute to the
+        public bump map. For the site-wide policy on what data we collect,
+        see the <Link href="/privacy" className="text-accent hover:underline">privacy policy</Link>.
+      </p>
+      <h2 className="mt-8 text-sm font-medium uppercase tracking-wide text-text-muted">
         Contribute to the public bump map
       </h2>
       <p className="mt-2 text-text-muted">

@@ -144,3 +144,7 @@ vite.config.ts.timestamp-*
 
 # Claude Code local config (preview launch defs, worktrees, etc.)
 .claude/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store

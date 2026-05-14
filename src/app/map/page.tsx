@@ -37,7 +37,9 @@ export default async function PublicMapPage() {
       </h1>
       <p className="mt-2 max-w-3xl text-text-muted">
         Average pavement roughness aggregated across every rider who&apos;s
-        opted in to public sharing. Cells are 20 ft squares; we only show a
+        opted in to public sharing — calibrated mounted-sensor data only.
+        Pocket-mode rides are excluded so the readings here aren&apos;t damped
+        by phone-on-body cushioning. Cells are 20 ft squares; we only show a
         cell once it has at least {MIN_PUBLIC_CELL_COUNT} samples, so a single
         rider can&apos;t accidentally publish a route by toggling sharing on.
         No timestamps, no routes, no per-user attribution.

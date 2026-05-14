@@ -78,7 +78,9 @@ export async function PATCH(req: NextRequest) {
     );
 
     if (body.shareToPublicMap) {
-      // Opting in: aggregate the user's existing ride_points into bump_cells.
+      // Opting in: aggregate the user's existing mounted-mode ride_points
+      // into bump_cells. Pocket-mode and unknown-mode rides are personal-
+      // only and never contribute to the public aggregate.
       await client.query(
         `WITH user_cells AS (
            SELECT
@@ -89,6 +91,7 @@ export async function PATCH(req: NextRequest) {
            FROM ride_points rp
            JOIN rides r ON r.ride_uuid = rp.ride_uuid
            WHERE r.user_id = $1
+             AND r.pocket_mode = FALSE
            GROUP BY ix, iy
          )
          INSERT INTO bump_cells (ix, iy, sum, count)
@@ -99,7 +102,9 @@ export async function PATCH(req: NextRequest) {
         [userId],
       );
     } else {
-      // Opting out: subtract the user's contributions from bump_cells.
+      // Opting out: subtract the user's mounted-mode contributions from
+      // bump_cells. Pocket-mode rides were never added, so we don't
+      // subtract them either.
       await client.query(
         `WITH user_cells AS (
            SELECT
@@ -110,6 +115,7 @@ export async function PATCH(req: NextRequest) {
            FROM ride_points rp
            JOIN rides r ON r.ride_uuid = rp.ride_uuid
            WHERE r.user_id = $1
+             AND r.pocket_mode = FALSE
            GROUP BY ix, iy
          )
          UPDATE bump_cells

@@ -120,8 +120,12 @@ export async function POST(req: NextRequest) {
   try {
     await client.query('BEGIN');
 
-    const existing = await client.query<{ ride_uuid: string; user_id: string }>(
-      'SELECT ride_uuid, user_id FROM rides WHERE ride_uuid = $1 FOR UPDATE',
+    const existing = await client.query<{
+      ride_uuid: string;
+      user_id: string;
+      pocket_mode: boolean | null;
+    }>(
+      'SELECT ride_uuid, user_id, pocket_mode FROM rides WHERE ride_uuid = $1 FOR UPDATE',
       [payload.id],
     );
     const isUpdate = existing.rows.length > 0;
@@ -136,6 +140,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Public aggregate eligibility — the bump_cells table is "calibrated
+    // mounted-sensor data from opted-in riders only". Both conditions
+    // gate writes to bump_cells; the personal map (ride_points join) is
+    // unaffected and still shows every ride.
+    const oldPocketMode = isUpdate ? existing.rows[0].pocket_mode : null;
+    const newPocketMode = payload.pocketMode ?? null;
+    const wasInPublic =
+      isUpdate && shareToPublicMap && oldPocketMode === false;
+    const willBeInPublic = shareToPublicMap && newPocketMode === false;
+
     const deltas = new Map<string, CellDelta>();
 
     if (isUpdate) {
@@ -147,13 +161,13 @@ export async function POST(req: NextRequest) {
         'SELECT latitude, longitude, bumpiness FROM ride_points WHERE ride_uuid = $1',
         [payload.id],
       );
-      accumulateDeltas(deltas, oldPoints.rows, -1);
+      if (wasInPublic) accumulateDeltas(deltas, oldPoints.rows, -1);
       await client.query('DELETE FROM ride_points WHERE ride_uuid = $1', [
         payload.id,
       ]);
     }
 
-    accumulateDeltas(deltas, payload.points, +1);
+    if (willBeInPublic) accumulateDeltas(deltas, payload.points, +1);
 
     if (isUpdate) {
       await client.query(
@@ -225,22 +239,28 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Only contribute to the global aggregate when the user has opted in
-    // to public sharing. Toggling the preference later backfills or
-    // subtracts the user's contributions, so the invariant
-    //   bump_cells = SUM of ride_points belonging to opted-in users
-    // holds at all times. See /api/me/sharing.
-    if (shareToPublicMap) {
-      for (const d of deltas.values()) {
-        if (d.sumDelta === 0 && d.countDelta === 0) continue;
-        await client.query(
-          `INSERT INTO bump_cells (ix, iy, sum, count) VALUES ($1, $2, $3, $4)
-           ON CONFLICT (ix, iy) DO UPDATE
-             SET sum = bump_cells.sum + EXCLUDED.sum,
-                 count = bump_cells.count + EXCLUDED.count`,
-          [d.ix, d.iy, d.sumDelta, d.countDelta],
-        );
-      }
+    // Apply bump_cells deltas. The map was built above from the
+    // (wasInPublic, willBeInPublic) cases:
+    //   was=T, will=T → net (new - old)         (re-sync, still eligible)
+    //   was=T, will=F → -old                    (mounted → pocket, or opted out)
+    //   was=F, will=T → +new                    (pocket → mounted, or opted in)
+    //   was=F, will=F → empty                   (no-op)
+    // so the loop below trivially handles every combination.
+    //
+    // The invariant we maintain:
+    //   bump_cells = SUM of ride_points where ride.pocket_mode = FALSE
+    //                                       AND user.share_to_public_map = TRUE
+    for (const d of deltas.values()) {
+      if (d.sumDelta === 0 && d.countDelta === 0) continue;
+      await client.query(
+        `INSERT INTO bump_cells (ix, iy, sum, count) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (ix, iy) DO UPDATE
+           SET sum = bump_cells.sum + EXCLUDED.sum,
+               count = bump_cells.count + EXCLUDED.count`,
+        [d.ix, d.iy, d.sumDelta, d.countDelta],
+      );
+    }
+    if (deltas.size > 0) {
       // A re-upload whose new points avoid a previously-touched cell can
       // drive that cell's running count to zero; drop those rows so the
       // public map doesn't keep emitting empty cells.

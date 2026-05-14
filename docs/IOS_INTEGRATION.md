@@ -133,6 +133,19 @@ Content-Type: application/json
 
 Body size note: a ride can be a few MB because of `accelWindow`. The server accepts up to 10 MB; rides larger than that would need a chunking protocol we haven't designed yet.
 
+#### Public-aggregate eligibility
+
+A ride contributes to the public bump map at `/map` iff **both** of these are true:
+
+1. The owning user has `shareToPublicMap = true` (toggled at `/settings/privacy`).
+2. The ride's `pocketMode` is **`false`** — that is, the phone was on a mounted, calibrated position.
+
+Pocket-mode rides (`pocketMode: true`) and legacy rides without the field (`pocketMode: null` — recorded before the field existed) are always personal-only; their points stay in `/bump-map` for the rider but never reach `/map`. The framing is "the public map shows calibrated sensor data" — phone-on-body damping would muddy that signal.
+
+Toggling sharing on backfills only mounted-mode rides; toggling off subtracts only mounted-mode contributions (pocket-mode rides were never added). Re-uploading the same `Ride.id` with a changed `pocketMode` flips its eligibility — the server applies the correct delta in a single transaction.
+
+iOS doesn't need to make any decisions here; just send the `pocketMode` value the way you record it, and the web will route the ride correctly.
+
 ### `GET /api/me/sharing`  *(bearer or session)*
 ### `PATCH /api/me/sharing`  *(bearer or session)*
 

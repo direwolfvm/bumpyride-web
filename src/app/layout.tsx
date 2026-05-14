@@ -67,7 +67,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                     href="/settings/privacy"
                     className="text-accent hover:underline"
                   >
-                    Privacy
+                    Sharing
                   </Link>
                   <span className="hidden text-text-muted sm:inline">
                     {session.user.email}
@@ -102,6 +102,34 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           </div>
         </header>
         <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">{children}</main>
+        <footer className="mx-auto mt-12 max-w-7xl border-t border-border px-4 py-6 text-sm text-text-muted sm:px-6">
+          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+            <div>
+              © {new Date().getFullYear()} BumpyRide. Built in the open at{' '}
+              <a
+                href="https://github.com/direwolfvm/bumpyride-web"
+                className="hover:underline"
+              >
+                github.com/direwolfvm
+              </a>
+              .
+            </div>
+            <nav className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <Link href="/privacy" className="hover:underline">
+                Privacy policy
+              </Link>
+              <Link href="/support" className="hover:underline">
+                Support
+              </Link>
+              <a
+                href="mailto:support@bumpyride.me"
+                className="hover:underline"
+              >
+                support@bumpyride.me
+              </a>
+            </nav>
+          </div>
+        </footer>
       </body>
     </html>
   );

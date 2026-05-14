@@ -25,6 +25,14 @@ export const users = pgTable('users', {
   // /api/me/sharing, which also backfills / subtracts the user's
   // bump_cells contribution to keep the aggregate consistent.
   shareToPublicMap: boolean('share_to_public_map').notNull().default(false),
+  // Per-rider pocket-mode calibration. iOS computes the gain locally
+  // (median of mountedAvg/pocketAvg across overlapping cells, clamped to
+  // [0.5, 5.0]) and PUTs it to /api/me/calibration. We apply the gain to
+  // a pocket-mode sample's bumpiness during aggregation when
+  // `pocketConfidence >= 3`. See bumpyride/docs/CALIBRATION.md.
+  pocketGain: doublePrecision('pocket_gain').notNull().default(1.0),
+  pocketConfidence: integer('pocket_confidence').notNull().default(0),
+  pocketCalibrationAt: timestamp('pocket_calibration_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

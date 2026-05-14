@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { auth } from '@/auth';
 import { pool } from '@/db';
 import { CELL_LAT_DEG, CELL_LON_DEG } from '@/lib/bump-grid';
+import { CONFIDENCE_FLOOR } from '@/lib/calibration';
 import {
   emptyTilePng,
   renderTile,
@@ -55,14 +56,29 @@ export async function GET(
   // Aggregate cells from this user's ride_points inside the bbox.
   // CELL_*_DEG are JS-side constants; embed as literals so the query plan
   // doesn't need to be re-prepared per call.
+  //
+  // Calibration: pocket-mode samples are scaled by the user's pocket_gain
+  // when their calibration is in effect (pocket_confidence >=
+  // CONFIDENCE_FLOOR), matching the rule the iOS app applies on-device.
+  // Mounted samples always use raw bumpiness. When `mountedOnly` is set
+  // (UI filter chip), pocket rides are dropped entirely; the gain is
+  // irrelevant in that branch.
   const sql = `
     SELECT
       floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
       floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
-      SUM(rp.bumpiness) AS sum,
-      COUNT(*)::int     AS count
+      SUM(
+        CASE
+          WHEN r.pocket_mode = TRUE
+            AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
+            THEN rp.bumpiness * u.pocket_gain
+          ELSE rp.bumpiness
+        END
+      ) AS sum,
+      COUNT(*)::int AS count
     FROM ride_points rp
     JOIN rides r ON r.ride_uuid = rp.ride_uuid
+    JOIN users u ON u.id = r.user_id
     WHERE r.user_id = $1
       AND rp.latitude  BETWEEN $2 AND $3
       AND rp.longitude BETWEEN $4 AND $5

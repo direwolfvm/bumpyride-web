@@ -42,10 +42,17 @@ export default async function PrivacySettingsPage() {
         ever in the public output.
       </p>
       <p className="mt-3 text-text-muted">
+        Only your <strong>mounted-mode</strong> rides contribute to the public
+        aggregate. Pocket-mode rides (and any legacy rides recorded before the
+        sensing mode was captured) stay in your personal view but never reach
+        the public map — so the public data isn&apos;t damped by phone-on-body
+        cushioning.
+      </p>
+      <p className="mt-3 text-text-muted">
         Sharing is <strong>off by default</strong>. Toggling here doesn&apos;t
         affect your private rides view or the iOS app — only what contributes
-        to the public aggregate. Toggling on backfills your existing rides into
-        the aggregate; toggling off removes them.
+        to the public aggregate. Toggling on backfills your existing
+        mounted-mode rides; toggling off removes them.
       </p>
       <SharingToggle initial={user?.shareToPublicMap ?? false} />
     </div>

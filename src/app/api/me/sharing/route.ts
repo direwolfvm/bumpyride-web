@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ZodError, z } from 'zod';
 import { pool } from '@/db';
 import { CELL_LAT_DEG, CELL_LON_DEG } from '@/lib/bump-grid';
+import { CONFIDENCE_FLOOR } from '@/lib/calibration';
 import { getRequestUserId } from '@/lib/request-auth';
 
 export const runtime = 'nodejs';
@@ -77,47 +78,68 @@ export async function PATCH(req: NextRequest) {
       [body.shareToPublicMap, userId],
     );
 
+    // The eligibility expression is shared between the opt-in (INSERT)
+    // and opt-out (UPDATE … SET ... -) paths: mounted rides always
+    // contribute raw, pocket rides contribute only when the rider's
+    // calibration is in effect (confidence >= CONFIDENCE_FLOOR), and the
+    // applied multiplier is then the rider's pocket_gain. Legacy rides
+    // (pocket_mode IS NULL) never contribute.
+    //
+    // Both queries source the same CTE; the only difference is whether
+    // sum/count get added (opt-in) or subtracted (opt-out).
+    const eligibleCte = `
+      WITH user_cells AS (
+        SELECT
+          floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
+          floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+          SUM(
+            CASE
+              WHEN r.pocket_mode = FALSE THEN rp.bumpiness
+              WHEN r.pocket_mode = TRUE AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
+                THEN rp.bumpiness * u.pocket_gain
+              ELSE 0
+            END
+          ) AS sum_delta,
+          SUM(
+            CASE
+              WHEN r.pocket_mode = FALSE THEN 1
+              WHEN r.pocket_mode = TRUE AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
+                THEN 1
+              ELSE 0
+            END
+          )::bigint AS count_delta
+        FROM ride_points rp
+        JOIN rides r ON r.ride_uuid = rp.ride_uuid
+        JOIN users u ON u.id = r.user_id
+        WHERE r.user_id = $1
+          AND (
+            r.pocket_mode = FALSE
+            OR (r.pocket_mode = TRUE AND u.pocket_confidence >= ${CONFIDENCE_FLOOR})
+          )
+        GROUP BY ix, iy
+      )
+    `;
+
     if (body.shareToPublicMap) {
-      // Opting in: aggregate the user's existing mounted-mode ride_points
-      // into bump_cells. Pocket-mode and unknown-mode rides are personal-
-      // only and never contribute to the public aggregate.
+      // Opting in: aggregate the user's eligible ride_points into
+      // bump_cells. Pocket-mode rides contribute when calibration is
+      // active; mounted-mode rides always contribute (raw).
       await client.query(
-        `WITH user_cells AS (
-           SELECT
-             floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
-             floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
-             SUM(rp.bumpiness)         AS sum_delta,
-             COUNT(*)::bigint           AS count_delta
-           FROM ride_points rp
-           JOIN rides r ON r.ride_uuid = rp.ride_uuid
-           WHERE r.user_id = $1
-             AND r.pocket_mode = FALSE
-           GROUP BY ix, iy
-         )
+        `${eligibleCte}
          INSERT INTO bump_cells (ix, iy, sum, count)
            SELECT ix, iy, sum_delta, count_delta FROM user_cells
+           WHERE count_delta > 0
          ON CONFLICT (ix, iy) DO UPDATE
            SET sum   = bump_cells.sum   + EXCLUDED.sum,
                count = bump_cells.count + EXCLUDED.count`,
         [userId],
       );
     } else {
-      // Opting out: subtract the user's mounted-mode contributions from
-      // bump_cells. Pocket-mode rides were never added, so we don't
-      // subtract them either.
+      // Opting out: subtract the user's eligible contributions. Same
+      // CTE — whatever we'd have added on opt-in, we subtract on
+      // opt-out, keeping the invariant tight.
       await client.query(
-        `WITH user_cells AS (
-           SELECT
-             floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
-             floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
-             SUM(rp.bumpiness)         AS sum_delta,
-             COUNT(*)::bigint           AS count_delta
-           FROM ride_points rp
-           JOIN rides r ON r.ride_uuid = rp.ride_uuid
-           WHERE r.user_id = $1
-             AND r.pocket_mode = FALSE
-           GROUP BY ix, iy
-         )
+        `${eligibleCte}
          UPDATE bump_cells
             SET sum   = bump_cells.sum   - user_cells.sum_delta,
                 count = bump_cells.count - user_cells.count_delta

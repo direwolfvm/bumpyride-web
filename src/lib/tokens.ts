@@ -23,30 +23,46 @@ export function hashApiToken(token: string): string {
 export type TokenLookup = {
   userId: string;
   shareToPublicMap: boolean;
+  pocketGain: number;
+  pocketConfidence: number;
 };
 
 /**
  * Look up the user that owns the given bearer token, stamp `last_used_at`,
- * and return their public-sharing preference (so the sync handler can decide
- * whether to write to `bump_cells` without a second DB round-trip).
+ * and return the user-level preferences the sync hot-path needs (public-
+ * sharing opt-in + pocket-mode calibration). All in one round-trip so
+ * /api/sync/ride doesn't grow a second DB call per upload.
  * Returns null if the token is unknown.
  */
 export async function lookupTokenUser(token: string): Promise<TokenLookup | null> {
   if (!token.startsWith(TOKEN_PREFIX)) return null;
   const hash = hashApiToken(token);
-  const res = await pool.query<{ user_id: string; share_to_public_map: boolean }>(
+  const res = await pool.query<{
+    user_id: string;
+    share_to_public_map: boolean;
+    pocket_gain: number;
+    pocket_confidence: number;
+  }>(
     `WITH t AS (
        UPDATE api_tokens SET last_used_at = now()
          WHERE token_hash = $1
        RETURNING user_id
      )
-     SELECT t.user_id, u.share_to_public_map
+     SELECT t.user_id,
+            u.share_to_public_map,
+            u.pocket_gain,
+            u.pocket_confidence
        FROM t JOIN users u ON u.id = t.user_id`,
     [hash],
   );
   const row = res.rows[0];
   if (!row) return null;
-  return { userId: row.user_id, shareToPublicMap: row.share_to_public_map };
+  return {
+    userId: row.user_id,
+    shareToPublicMap: row.share_to_public_map,
+    pocketGain: Number(row.pocket_gain),
+    pocketConfidence: Number(row.pocket_confidence),
+  };
 }
 
 export function parseBearer(authorization: string | null): string | null {

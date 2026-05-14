@@ -34,6 +34,7 @@ export default async function RidesListPage({
         distanceM: rides.distanceM,
         maxBumpiness: rides.maxBumpiness,
         avgBumpiness: rides.avgBumpiness,
+        pocketMode: rides.pocketMode,
       })
       .from(rides)
       .where(eq(rides.userId, userId))
@@ -70,6 +71,12 @@ export default async function RidesListPage({
                 <th className="px-4 py-3 font-medium">Duration</th>
                 <th className="px-4 py-3 font-medium">Avg bumpiness</th>
                 <th className="px-4 py-3 font-medium">Max bumpiness</th>
+                <th
+                  className="px-4 py-3 font-medium"
+                  title="Whether the iOS app's 3 Hz body-bob filter was active during recording. Pocket-mode rides are damped and don't contribute to the public map."
+                >
+                  Pocket mode
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -102,6 +109,9 @@ export default async function RidesListPage({
                   </td>
                   <td className="px-4 py-3 tabular-nums">
                     {r.maxBumpiness.toFixed(2)} g
+                  </td>
+                  <td className="px-4 py-3">
+                    <PocketBadge value={r.pocketMode} />
                   </td>
                 </tr>
               ))}
@@ -138,6 +148,28 @@ export default async function RidesListPage({
         </nav>
       )}
     </div>
+  );
+}
+
+function PocketBadge({ value }: { value: boolean | null }) {
+  // Each badge style hints what it means for the public aggregate:
+  //   off → contributes (calibrated, mounted sensor) → accent
+  //   on  → personal-only (damped) → muted
+  //   unknown → personal-only (legacy ride, sensing mode wasn't captured)
+  if (value === null) {
+    return <span className="text-text-dim">—</span>;
+  }
+  if (value === true) {
+    return (
+      <span className="inline-flex items-center rounded-full bg-surface-2 px-2 py-0.5 text-xs text-text-muted">
+        On
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-xs text-accent">
+      Off
+    </span>
   );
 }
 

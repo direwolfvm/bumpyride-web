@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ZodError, z } from 'zod';
 import { pool } from '@/db';
 import { CELL_LAT_DEG, CELL_LON_DEG } from '@/lib/bump-grid';
-import { CONFIDENCE_FLOOR } from '@/lib/calibration';
 import { getRequestUserId } from '@/lib/request-auth';
 
 export const runtime = 'nodejs';
@@ -78,57 +77,33 @@ export async function PATCH(req: NextRequest) {
       [body.shareToPublicMap, userId],
     );
 
-    // The eligibility expression is shared between the opt-in (INSERT)
-    // and opt-out (UPDATE … SET ... -) paths: mounted rides always
-    // contribute raw, pocket rides contribute only when the rider's
-    // calibration is in effect (confidence >= CONFIDENCE_FLOOR), and the
-    // applied multiplier is then the rider's pocket_gain. Legacy rides
-    // (pocket_mode IS NULL) never contribute.
-    //
-    // Both queries source the same CTE; the only difference is whether
-    // sum/count get added (opt-in) or subtracted (opt-out).
+    // Eligibility for the public aggregate is `pocket_mode IS DISTINCT
+    // FROM TRUE` — mounted-mode plus legacy null-pocket rides. Pocket
+    // rides never contribute to bump_cells under the current policy
+    // (the iOS Bump Map's default filter is Mounted, and we mirror it).
+    // Same CTE for both opt-in (INSERT) and opt-out (UPDATE … -).
     const eligibleCte = `
       WITH user_cells AS (
         SELECT
           floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
           floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
-          SUM(
-            CASE
-              WHEN r.pocket_mode = FALSE THEN rp.bumpiness
-              WHEN r.pocket_mode = TRUE AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
-                THEN rp.bumpiness * u.pocket_gain
-              ELSE 0
-            END
-          ) AS sum_delta,
-          SUM(
-            CASE
-              WHEN r.pocket_mode = FALSE THEN 1
-              WHEN r.pocket_mode = TRUE AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
-                THEN 1
-              ELSE 0
-            END
-          )::bigint AS count_delta
+          SUM(rp.bumpiness) AS sum_delta,
+          COUNT(*)::bigint  AS count_delta
         FROM ride_points rp
         JOIN rides r ON r.ride_uuid = rp.ride_uuid
-        JOIN users u ON u.id = r.user_id
         WHERE r.user_id = $1
-          AND (
-            r.pocket_mode = FALSE
-            OR (r.pocket_mode = TRUE AND u.pocket_confidence >= ${CONFIDENCE_FLOOR})
-          )
+          AND r.pocket_mode IS DISTINCT FROM TRUE
         GROUP BY ix, iy
       )
     `;
 
     if (body.shareToPublicMap) {
       // Opting in: aggregate the user's eligible ride_points into
-      // bump_cells. Pocket-mode rides contribute when calibration is
-      // active; mounted-mode rides always contribute (raw).
+      // bump_cells.
       await client.query(
         `${eligibleCte}
          INSERT INTO bump_cells (ix, iy, sum, count)
            SELECT ix, iy, sum_delta, count_delta FROM user_cells
-           WHERE count_delta > 0
          ON CONFLICT (ix, iy) DO UPDATE
            SET sum   = bump_cells.sum   + EXCLUDED.sum,
                count = bump_cells.count + EXCLUDED.count`,

@@ -5,11 +5,40 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
 
-type Mode = 'all' | 'mounted';
+// Three-option filter, mirroring the iOS Bump Map's segmented control.
+//   all      every ride
+//   mounted  pocket_mode IS DISTINCT FROM TRUE  (mounted + legacy null)
+//   pocket   pocket_mode = TRUE
+// Default is `mounted` (matches iOS default).
+type Mode = 'all' | 'mounted' | 'pocket';
+const DEFAULT_MODE: Mode = 'mounted';
+
+// Persisted in localStorage per-browser. Matches iOS's UserDefaults
+// per-device persistence — different browsers / devices keep
+// independent filter states.
+const STORAGE_KEY = 'bumpmap.mode';
+
+function readStoredMode(): Mode {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY);
+    if (v === 'all' || v === 'mounted' || v === 'pocket') return v;
+  } catch {}
+  return DEFAULT_MODE;
+}
 
 const TILE_BASE = '/api/tiles/user/{z}/{x}/{y}';
-const tileUrl = (m: Mode) =>
-  m === 'mounted' ? `${TILE_BASE}?mode=mounted` : TILE_BASE;
+function tileUrl(m: Mode): string {
+  // The server defaults to mounted too, but pass the param explicitly
+  // either way so the URL is unambiguous in network logs.
+  return `${TILE_BASE}?mode=${m}`;
+}
+
+const CAPTION: Record<Mode, string> = {
+  all: 'Showing all your synced rides.',
+  mounted:
+    'Showing rides with the phone mounted on the bike (and legacy rides whose mode wasn’t recorded).',
+  pocket: 'Showing rides recorded with the phone in your pocket.',
+};
 
 export function PrivateBumpMap({
   minLat,
@@ -24,7 +53,13 @@ export function PrivateBumpMap({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const [mode, setMode] = useState<Mode>('all');
+  // The default in SSR / first paint matches DEFAULT_MODE; we promote
+  // to the user's stored preference on mount.
+  const [mode, setMode] = useState<Mode>(DEFAULT_MODE);
+
+  useEffect(() => {
+    setMode(readStoredMode());
+  }, []);
 
   // Mode is read inside the map's `load` callback (which fires after this
   // effect's sync body returns) — store it on a ref so the callback always
@@ -76,20 +111,24 @@ export function PrivateBumpMap({
     (src as maplibregl.RasterTileSource).setTiles([tileUrl(mode)]);
   }, [mode]);
 
+  function selectMode(next: Mode) {
+    setMode(next);
+    try {
+      localStorage.setItem(STORAGE_KEY, next);
+    } catch {}
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-sm text-text-muted">
-          {mode === 'mounted'
-            ? 'Showing rides recorded with the phone mounted on the bike.'
-            : 'Showing all your synced rides.'}
-        </div>
+        <div className="text-sm text-text-muted">{CAPTION[mode]}</div>
         <Segmented
           value={mode}
-          onChange={setMode}
+          onChange={selectMode}
           options={[
-            { value: 'all', label: 'All rides' },
-            { value: 'mounted', label: 'Mounted only' },
+            { value: 'all', label: 'All' },
+            { value: 'mounted', label: 'Mounted' },
+            { value: 'pocket', label: 'Pocket' },
           ]}
         />
       </div>

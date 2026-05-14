@@ -45,11 +45,27 @@ export async function GET(
   }
   if (z < 0 || z > 22) return NOT_FOUND_TILE(400);
 
-  // Optional filter: `?mode=mounted` drops pocket-mode and unknown-mode
-  // rides. Anything else (missing, or `mode=all`) shows every ride —
-  // matches the personal-map default of "everything you've recorded".
+  // Filter chip on /bump-map, mirroring the iOS Bump Map's three-option
+  // segmented control:
+  //
+  //   ?mode=all      include every ride
+  //   ?mode=mounted  pocket_mode IS DISTINCT FROM TRUE   (mounted + null)
+  //   ?mode=pocket   pocket_mode = TRUE
+  //
+  // Default (missing/unknown) is `mounted` — same default as iOS. Legacy
+  // rides where pocket_mode IS NULL bucket with mounted (early users
+  // almost universally had handlebar mounts; bucketing them with
+  // mounted matches reality and doesn't penalise no-recourse).
   const mode = req.nextUrl.searchParams.get('mode');
-  const mountedOnly = mode === 'mounted';
+  let modeFilter = '';
+  if (mode === 'all') {
+    modeFilter = '';
+  } else if (mode === 'pocket') {
+    modeFilter = 'AND r.pocket_mode = TRUE';
+  } else {
+    // mounted (default)
+    modeFilter = 'AND r.pocket_mode IS DISTINCT FROM TRUE';
+  }
 
   const bbox = tileQueryBbox(z, x, y);
 
@@ -57,12 +73,12 @@ export async function GET(
   // CELL_*_DEG are JS-side constants; embed as literals so the query plan
   // doesn't need to be re-prepared per call.
   //
-  // Calibration: pocket-mode samples are scaled by the user's pocket_gain
-  // when their calibration is in effect (pocket_confidence >=
-  // CONFIDENCE_FLOOR), matching the rule the iOS app applies on-device.
-  // Mounted samples always use raw bumpiness. When `mountedOnly` is set
-  // (UI filter chip), pocket rides are dropped entirely; the gain is
-  // irrelevant in that branch.
+  // Calibration applies regardless of the filter: pocket-mode samples
+  // are scaled by the user's pocket_gain when their calibration is in
+  // effect (pocket_confidence >= CONFIDENCE_FLOOR), matching the rule
+  // the iOS app applies on-device. Mounted samples always use raw
+  // bumpiness. When the filter excludes pocket rides, the CASE branch
+  // is unreachable anyway.
   const sql = `
     SELECT
       floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
@@ -82,7 +98,7 @@ export async function GET(
     WHERE r.user_id = $1
       AND rp.latitude  BETWEEN $2 AND $3
       AND rp.longitude BETWEEN $4 AND $5
-      ${mountedOnly ? 'AND r.pocket_mode = FALSE' : ''}
+      ${modeFilter}
     GROUP BY ix, iy
   `;
 

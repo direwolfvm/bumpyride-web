@@ -121,10 +121,10 @@ export default function AboutPage() {
           <Feature title="Public aggregated map">
             Anonymous, no account needed. Cells appear only after they have at
             least 3 samples — so a single rider&apos;s solo route never
-            publishes on its own. Only mounted-mode rides contribute, so the
-            public data reflects calibrated sensor readings rather than
-            pocket-damped ones. No timestamps, no routes, no per-user
-            attribution.{' '}
+            publishes on its own. Only mounted-mode rides contribute (matching
+            the iOS Bump Map&apos;s default filter), so the public data
+            reflects calibrated sensor readings rather than pocket-damped
+            ones. No timestamps, no routes, no per-user attribution.{' '}
             <Link href="/map" className="hover:underline">
               See the live map →
             </Link>
@@ -159,7 +159,7 @@ export default function AboutPage() {
           traces back to you individually. Toggling sharing off subtracts
           your contributions; we maintain the invariant{' '}
           <code className="rounded bg-surface-2 px-1.5 py-0.5 text-sm">
-            public cells = sum of mounted-mode points from opted-in users
+            public cells = sum of mounted-or-legacy points from opted-in users
           </code>{' '}
           at all times. Pocket-mode rides stay in your personal view and
           never reach the public aggregate.

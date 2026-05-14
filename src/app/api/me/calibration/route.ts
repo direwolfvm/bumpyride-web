@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ZodError, z } from 'zod';
 import { pool } from '@/db';
-import { CELL_LAT_DEG, CELL_LON_DEG } from '@/lib/bump-grid';
-import { CONFIDENCE_FLOOR, GAIN_MAX, GAIN_MIN } from '@/lib/calibration';
+import { GAIN_MAX, GAIN_MIN } from '@/lib/calibration';
 import { getRequestUserId } from '@/lib/request-auth';
 
 export const runtime = 'nodejs';
@@ -12,10 +11,12 @@ export const dynamic = 'force-dynamic';
 //
 // Storage: users.{pocket_gain, pocket_confidence, pocket_calibration_at}.
 //
-// Application: at aggregation time (not at ingest). When `pocket_confidence
-// >= CONFIDENCE_FLOOR`, pocket-mode samples are scaled by `pocket_gain`
-// before they contribute to bump_cells (public aggregate) or the personal
-// tile sums.
+// Application: only on the rider's personal map (/api/tiles/user/...).
+// Pocket-mode rides never contribute to the public aggregate today, so
+// changing a user's calibration has no effect on bump_cells — we just
+// update the stored values. The personal-tile SQL reads `pocket_gain`
+// and `pocket_confidence` directly, so a PUT is reflected on the next
+// tile request.
 //
 // Both GET and PUT accept either a Bearer API token (iOS) or a web
 // session cookie, matching /api/me/sharing.
@@ -79,117 +80,17 @@ export async function PUT(req: NextRequest) {
   const newConfidence = body.confidence;
   const newAt = body.lastComputedAt ? new Date(body.lastComputedAt) : null;
 
-  // The hard part: applying the new calibration to bump_cells.
-  //
-  // We compute the delta the user's pocket contributions would change
-  // by under the (old gain, old confidence) → (new gain, new confidence)
-  // transition, and apply it in a single CTE-driven UPDATE.
-  //
-  // Effective contribution of a pocket cell:
-  //     active && shared → raw_sum * gain   (count = raw_count)
-  //     otherwise        → 0                (count = 0)
-  // where active := (confidence >= CONFIDENCE_FLOOR).
-  //
-  // delta_sum   = new_active*new_gain*raw_sum - old_active*old_gain*raw_sum
-  // delta_count = new_active*raw_count       - old_active*raw_count
-  //
-  // For mounted-mode rides, nothing here matters — they always contribute
-  // raw bumpiness regardless of the user's calibration. So we only need
-  // to touch cells reachable from pocket-mode points.
-  //
-  // The transaction is short even at scale: O(pocket-mode cells for this
-  // user). At our size (single-digit rides) it's milliseconds.
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const before = await client.query<{
-      pocket_gain: number;
-      pocket_confidence: number;
-      share_to_public_map: boolean;
-    }>(
-      `SELECT pocket_gain, pocket_confidence, share_to_public_map
-         FROM users WHERE id = $1 FOR UPDATE`,
-      [userId],
-    );
-    if (before.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return NextResponse.json({ error: 'user not found' }, { status: 401 });
-    }
-    const oldGain = Number(before.rows[0].pocket_gain);
-    const oldConfidence = Number(before.rows[0].pocket_confidence);
-    const shared = before.rows[0].share_to_public_map;
-
-    const oldActive = oldConfidence >= CONFIDENCE_FLOOR;
-    const newActive = newConfidence >= CONFIDENCE_FLOOR;
-
-    await client.query(
-      `UPDATE users
-          SET pocket_gain = $2,
-              pocket_confidence = $3,
-              pocket_calibration_at = $4
-        WHERE id = $1`,
-      [userId, newGain, newConfidence, newAt],
-    );
-
-    // Only the user's pocket-mode points are affected, and only when
-    // they're sharing publicly (their data is in bump_cells in the first
-    // place). The math collapses to "no-op" if both `oldActive` and
-    // `newActive` are false, or if `shared` is false.
-    if (shared && (oldActive || newActive)) {
-      const oldEffective = oldActive ? oldGain : 0;
-      const newEffective = newActive ? newGain : 0;
-      const sumMultiplier = newEffective - oldEffective;
-      const countDelta = (newActive ? 1 : 0) - (oldActive ? 1 : 0);
-
-      // Two CTEs: gather the user's pocket-mode cell sums, then upsert
-      // the delta. We use ON CONFLICT so cells that didn't yet exist
-      // (transitioning oldActive=false → newActive=true) get inserted.
-      await client.query(
-        `WITH pocket_cells AS (
-           SELECT
-             floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
-             floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
-             SUM(rp.bumpiness)::float8 AS raw_sum,
-             COUNT(*)::bigint          AS raw_count
-           FROM ride_points rp
-           JOIN rides r ON r.ride_uuid = rp.ride_uuid
-           WHERE r.user_id = $1
-             AND r.pocket_mode = TRUE
-           GROUP BY ix, iy
-         ),
-         deltas AS (
-           SELECT
-             ix,
-             iy,
-             raw_sum   * $2::float8       AS sum_delta,
-             raw_count * $3::bigint       AS count_delta
-           FROM pocket_cells
-           WHERE raw_count > 0
-         )
-         INSERT INTO bump_cells (ix, iy, sum, count)
-           SELECT ix, iy, sum_delta, count_delta FROM deltas
-         ON CONFLICT (ix, iy) DO UPDATE
-           SET sum   = bump_cells.sum   + EXCLUDED.sum,
-               count = bump_cells.count + EXCLUDED.count`,
-        [userId, sumMultiplier, countDelta],
-      );
-
-      // A transition that subtracts can drive cells to zero; prune them
-      // so the public map doesn't keep emitting empty cells.
-      if (sumMultiplier < 0 || countDelta < 0) {
-        await client.query('DELETE FROM bump_cells WHERE count <= 0');
-      }
-    }
-
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    console.error('calibration update failed', err);
-    return NextResponse.json({ error: 'internal error' }, { status: 500 });
-  } finally {
-    client.release();
+  const res = await pool.query<{ id: string }>(
+    `UPDATE users
+        SET pocket_gain = $2,
+            pocket_confidence = $3,
+            pocket_calibration_at = $4
+      WHERE id = $1
+      RETURNING id`,
+    [userId, newGain, newConfidence, newAt],
+  );
+  if (res.rows.length === 0) {
+    return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
 
   return NextResponse.json({

@@ -105,8 +105,14 @@ export default async function AccountPage() {
           </li>
         </ul>
         <p className="mt-3 text-xs text-text-muted">
-          Account recovery options (recovery codes, authenticator app) are
-          coming soon in <em>/settings/security</em>.
+          Set up recovery codes or an authenticator app at{' '}
+          <Link
+            href="/settings/security"
+            className="text-accent hover:underline"
+          >
+            /settings/security
+          </Link>{' '}
+          so you can reset your password if you forget it.
         </p>
       </section>
     </div>

@@ -33,6 +33,13 @@ export default async function LoginPage({
         </Link>
         .
       </p>
+      <p className="mt-2 text-sm text-text-muted">
+        Forgot your password?{' '}
+        <Link href="/forgot" className="text-accent hover:underline">
+          Reset it
+        </Link>
+        .
+      </p>
     </div>
   );
 }

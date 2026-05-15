@@ -52,14 +52,26 @@ export default async function BumpMapPage() {
           />
         ) : (
           <div className="rounded-lg border border-dashed border-border bg-surface p-10 text-center text-text-muted">
-            No rides synced yet. Pair the iOS app from{' '}
-            <Link
-              href="/settings/tokens"
-              className="text-accent hover:underline"
-            >
-              /settings/tokens
-            </Link>{' '}
-            to start building your map.
+            <p>
+              No rides synced yet. Pair the iOS app from{' '}
+              <Link
+                href="/settings/tokens"
+                className="text-accent hover:underline"
+              >
+                /settings/tokens
+              </Link>{' '}
+              to start building your map.
+            </p>
+            <p className="mt-2 text-sm">
+              Don&apos;t have the app yet?{' '}
+              <a
+                href="https://apps.apple.com/app/id6769580787"
+                className="text-accent hover:underline"
+              >
+                Download BumpyRide on the App Store
+              </a>
+              .
+            </p>
           </div>
         )}
       </div>

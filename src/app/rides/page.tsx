@@ -193,6 +193,16 @@ function EmptyState() {
         </Link>{' '}
         and rides will appear here as they upload.
       </p>
+      <p className="mt-2 text-sm text-text-muted">
+        Don&apos;t have the app yet?{' '}
+        <a
+          href="https://apps.apple.com/app/id6769580787"
+          className="text-accent hover:underline"
+        >
+          Download BumpyRide on the App Store
+        </a>
+        .
+      </p>
     </div>
   );
 }

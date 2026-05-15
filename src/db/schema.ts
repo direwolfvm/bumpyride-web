@@ -1,6 +1,7 @@
 import {
   bigint,
   boolean,
+  customType,
   doublePrecision,
   index,
   integer,
@@ -9,8 +10,16 @@ import {
   real,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
+
+// Postgres BYTEA exposed to JS as Buffer.
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return 'bytea';
+  },
+});
 import { sql } from 'drizzle-orm';
 import type { AdapterAccountType } from 'next-auth/adapters';
 
@@ -33,8 +42,35 @@ export const users = pgTable('users', {
   pocketGain: doublePrecision('pocket_gain').notNull().default(1.0),
   pocketConfidence: integer('pocket_confidence').notNull().default(0),
   pocketCalibrationAt: timestamp('pocket_calibration_at', { withTimezone: true }),
+  // RFC 6238 TOTP. Raw secret bytes; null when unset. `totp_enabled` lags
+  // the secret — it stays false until the user verifies their first code
+  // at setup, so an abandoned setup doesn't lock anyone out.
+  totpSecret: bytea('totp_secret'),
+  totpEnabled: boolean('totp_enabled').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Single-use password-recovery codes. Plaintext shown once at creation;
+// only sha256 stored. Regenerating wipes the user's rows and inserts a
+// fresh 8.
+export const recoveryCodes = pgTable(
+  'recovery_codes',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+  },
+  (t) => ({
+    userCodeUq: uniqueIndex('recovery_codes_user_id_code_hash_key').on(
+      t.userId,
+      t.codeHash,
+    ),
+  }),
+);
 
 export const accounts = pgTable(
   'accounts',

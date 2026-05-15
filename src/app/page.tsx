@@ -54,18 +54,18 @@ export default function Home() {
         <h2 className="text-sm font-medium uppercase tracking-wide text-text-muted">
           On your iPhone
         </h2>
-        <div className="mt-4 rounded-lg border border-accent-strong/40 bg-accent-soft p-4 text-sm">
+        <div className="mt-4 flex flex-col gap-3 rounded-lg border border-accent-strong/40 bg-accent-soft p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
           <p>
-            <strong>The iOS app is in private preview.</strong> Watch{' '}
-            <a
-              href="https://github.com/direwolfvm/bumpyride"
-              className="hover:underline"
-            >
-              the repository
-            </a>{' '}
-            for release news. Sync, accounts, and the public map on this
-            site are open today.
+            <strong>Now available on the App Store.</strong> Free download
+            for iPhone — record rides, see your personal bump map, and sync
+            with your account here.
           </p>
+          <a
+            href="https://apps.apple.com/app/id6769580787"
+            className="inline-block shrink-0 rounded bg-accent-strong px-4 py-2 font-medium text-white hover:bg-accent-strong/90"
+          >
+            Download on the App Store
+          </a>
         </div>
         <ul className="mt-4 space-y-3">
           <Feature title="Live recording">

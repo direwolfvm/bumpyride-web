@@ -58,6 +58,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                     My bump map
                   </Link>
                   <Link
+                    href="/settings/account"
+                    className="text-accent hover:underline"
+                  >
+                    Account
+                  </Link>
+                  <Link
                     href="/settings/tokens"
                     className="text-accent hover:underline"
                   >

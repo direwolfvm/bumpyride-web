@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 import { pool } from '@/db';
 import { rideSchema, type RidePayload } from '@/lib/ride-schema';
-import { gridIndex } from '@/lib/bump-grid';
+import { CELL_LAT_DEG, CELL_LON_DEG, gridIndex } from '@/lib/bump-grid';
 import { lookupTokenUser, parseBearer } from '@/lib/tokens';
 
 export const dynamic = 'force-dynamic';
@@ -288,6 +288,83 @@ export async function POST(req: NextRequest) {
       // drive that cell's running count to zero; drop those rows so the
       // public map doesn't keep emitting empty cells.
       await client.query('DELETE FROM bump_cells WHERE count <= 0');
+    }
+
+    // Maintain bump_cell_contributors — the distinct (cell, user) set
+    // that drives the "3+ users have contributed" public-visibility
+    // predicate. Two operations:
+    //   (a) Add this user for every cell the new ride touches (if the
+    //       new ride is eligible).
+    //   (b) For every cell the old ride touched but the new one
+    //       doesn't, remove this user IFF no other eligible ride of
+    //       theirs still covers that cell.
+    // Pocket-mode or sharing-off rides never appear in the deltas map
+    // (accumulateDeltas is only called when eligible), so the set of
+    // cells we care about is exactly what's in deltas.
+    if (willBeInPublic) {
+      const newCells = new Set<string>();
+      for (const p of payload.points) {
+        const { ix, iy } = gridIndex(p.latitude, p.longitude);
+        newCells.add(`${ix}:${iy}`);
+      }
+      for (const key of newCells) {
+        const [ix, iy] = key.split(':').map(Number);
+        await client.query(
+          `INSERT INTO bump_cell_contributors (ix, iy, user_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT DO NOTHING`,
+          [ix, iy, userId],
+        );
+      }
+    }
+
+    if (wasInPublic) {
+      // Collect cells the old ride used to touch. We don't have the old
+      // points anymore (deleted above), so reconstruct from the deltas
+      // map: any cell with a negative countDelta is one the old ride
+      // contributed to. Anything with a non-negative net countDelta
+      // that the new ride also touches stays; anything where the new
+      // ride doesn't touch (i.e. NOT in newCells when willBeInPublic,
+      // or simply every cell with negative countDelta when !will) may
+      // need cleanup.
+      const oldCellKeys: { ix: number; iy: number }[] = [];
+      if (willBeInPublic) {
+        const newKeys = new Set<string>();
+        for (const p of payload.points) {
+          const { ix, iy } = gridIndex(p.latitude, p.longitude);
+          newKeys.add(`${ix}:${iy}`);
+        }
+        for (const d of deltas.values()) {
+          if (!newKeys.has(`${d.ix}:${d.iy}`)) {
+            oldCellKeys.push({ ix: d.ix, iy: d.iy });
+          }
+        }
+      } else {
+        // Ride went from public-eligible to not: every cell it used to
+        // touch is a candidate for removal.
+        for (const d of deltas.values()) {
+          oldCellKeys.push({ ix: d.ix, iy: d.iy });
+        }
+      }
+      for (const { ix, iy } of oldCellKeys) {
+        // Only drop this user's contributor row if no other eligible
+        // ride of theirs covers the same cell. Embed CELL_*_DEG as
+        // literals — matches the sharing-toggle CTE and the
+        // bump-grid.ts JS-side floor math.
+        await client.query(
+          `DELETE FROM bump_cell_contributors
+             WHERE ix = $1 AND iy = $2 AND user_id = $3
+               AND NOT EXISTS (
+                 SELECT 1 FROM ride_points rp
+                 JOIN rides r ON r.ride_uuid = rp.ride_uuid
+                 WHERE r.user_id = $3
+                   AND r.pocket_mode IS DISTINCT FROM TRUE
+                   AND floor(rp.longitude / ${CELL_LON_DEG}::float8)::int = $1
+                   AND floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int = $2
+               )`,
+          [ix, iy, userId],
+        );
+      }
     }
 
     await client.query('COMMIT');

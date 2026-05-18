@@ -24,10 +24,10 @@ export default function SupportPage() {
           Contact
         </div>
         <a
-          href="mailto:support@bumpyride.me"
+          href="mailto:me@jordaneccl.es"
           className="mt-2 block text-xl font-medium"
         >
-          support@bumpyride.me
+          me@jordaneccl.es
         </a>
         <p className="mt-3 text-sm text-text-muted">
           Replies usually within a day or two. If your question is about a
@@ -91,7 +91,7 @@ export default function SupportPage() {
       <Faq question="How do I delete my account?">
         <p>
           A self-service delete flow is on the roadmap. In the meantime,
-          email <a href="mailto:support@bumpyride.me">support@bumpyride.me</a>{' '}
+          email <a href="mailto:me@jordaneccl.es">me@jordaneccl.es</a>{' '}
           from the address tied to your account and we&apos;ll delete the
           account, every ride, every token, and every contribution to the
           public bump map within seven days. We&apos;ll confirm by reply.
@@ -111,7 +111,7 @@ export default function SupportPage() {
 
       <Faq question="Where can I report a bug?">
         <p>
-          Email <a href="mailto:support@bumpyride.me">support@bumpyride.me</a>{' '}
+          Email <a href="mailto:me@jordaneccl.es">me@jordaneccl.es</a>{' '}
           with:
         </p>
         <ul className="ml-5 mt-2 list-disc space-y-1">

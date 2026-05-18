@@ -173,7 +173,7 @@ export default function PrivacyPage() {
         <li>
           <strong>Account deletion</strong>: a self-service flow at{' '}
           <code>/settings</code> is on the roadmap. In the meantime, email{' '}
-          <a href="mailto:support@bumpyride.me">support@bumpyride.me</a> and
+          <a href="mailto:me@jordaneccl.es">me@jordaneccl.es</a> and
           we will delete your account, all associated rides, and all
           aggregate contributions within seven days.
         </li>
@@ -197,7 +197,7 @@ export default function PrivacyPage() {
       <p>
         BumpyRide is not directed at children under 13 and does not knowingly
         collect data from them. If you believe a minor has shared data with
-        us, email <a href="mailto:support@bumpyride.me">support@bumpyride.me</a>{' '}
+        us, email <a href="mailto:me@jordaneccl.es">me@jordaneccl.es</a>{' '}
         and we will delete it.
       </p>
 
@@ -232,7 +232,7 @@ export default function PrivacyPage() {
       <H2>Contact</H2>
       <p>
         Questions about this policy? Email{' '}
-        <a href="mailto:support@bumpyride.me">support@bumpyride.me</a>.
+        <a href="mailto:me@jordaneccl.es">me@jordaneccl.es</a>.
       </p>
     </article>
   );

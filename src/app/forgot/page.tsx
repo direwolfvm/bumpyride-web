@@ -37,10 +37,10 @@ export default async function ForgotPage() {
         </Link>
         . Otherwise email{' '}
         <a
-          href="mailto:support@bumpyride.me"
+          href="mailto:me@jordaneccl.es"
           className="text-accent hover:underline"
         >
-          support@bumpyride.me
+          me@jordaneccl.es
         </a>
         .
       </p>

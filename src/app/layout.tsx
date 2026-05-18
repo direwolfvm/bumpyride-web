@@ -128,10 +128,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                 Support
               </Link>
               <a
-                href="mailto:support@bumpyride.me"
+                href="mailto:me@jordaneccl.es"
                 className="hover:underline"
               >
-                support@bumpyride.me
+                me@jordaneccl.es
               </a>
             </nav>
           </div>

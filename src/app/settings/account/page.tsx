@@ -49,7 +49,7 @@ export default async function AccountPage() {
           Signed in as <strong>{user.email}</strong>. Email isn&apos;t
           editable here yet — contact{' '}
           <a
-            href="mailto:support@bumpyride.me"
+            href="mailto:me@jordaneccl.es"
             className="text-accent hover:underline"
           >
             support

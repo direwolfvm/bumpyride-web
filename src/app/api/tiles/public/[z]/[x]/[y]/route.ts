@@ -12,16 +12,29 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 // Public aggregated bump-map tiles. Anonymous access; reads from the
-// maintained `bump_cells` table, applying a minimum-count threshold so a
-// single rider's solo route doesn't appear in public until the cells are
-// reinforced by other contributions.
+// maintained `bump_cells` table, applying a minimum-distinct-users
+// threshold so a single rider's solo route doesn't appear in public
+// until the cells are reinforced by other contributors.
 //
-// The threshold is configurable via env so we can dial it in as the user
-// base grows.
+// A cell renders if EITHER
+//   (a) at least MIN_PUBLIC_CELL_USERS distinct sharing users have
+//       contributed to it, OR
+//   (b) at least one of its contributors has `public_map_eager = TRUE`
+//       (the per-user escape valve — e.g. for power users seeding a
+//       brand-new region).
+//
+// The threshold is configurable via env so we can dial it in as the
+// user base grows. The legacy `PUBLIC_BUMPMAP_MIN_COUNT` env var is
+// still read for back-compat with deployments that haven't migrated.
 
-const MIN_PUBLIC_CELL_COUNT = Math.max(
+const MIN_PUBLIC_CELL_USERS = Math.max(
   1,
-  Number.parseInt(process.env.PUBLIC_BUMPMAP_MIN_COUNT ?? '3', 10) || 3,
+  Number.parseInt(
+    process.env.PUBLIC_BUMPMAP_MIN_USERS ??
+      process.env.PUBLIC_BUMPMAP_MIN_COUNT ??
+      '3',
+    10,
+  ) || 3,
 );
 
 const PNG_HEADERS = {
@@ -57,12 +70,23 @@ export async function GET(
 
   let cells: Cell[];
   try {
+    // For each cell in the tile's bbox, the EXISTS subquery decides
+    // visibility using the contributor set. `HAVING count(*) >= N OR
+    // bool_or(public_map_eager)` collapses both conditions into one
+    // pass over the cell's contributor rows (PK-indexed by ix, iy).
     const res = await pool.query<Cell>(
-      `SELECT ix, iy, sum, count FROM bump_cells
-        WHERE ix BETWEEN $1 AND $2
-          AND iy BETWEEN $3 AND $4
-          AND count >= $5`,
-      [ixMin, ixMax, iyMin, iyMax, MIN_PUBLIC_CELL_COUNT],
+      `SELECT bc.ix, bc.iy, bc.sum, bc.count
+         FROM bump_cells bc
+        WHERE bc.ix BETWEEN $1 AND $2
+          AND bc.iy BETWEEN $3 AND $4
+          AND EXISTS (
+            SELECT 1
+              FROM bump_cell_contributors bcc
+              JOIN users u ON u.id = bcc.user_id
+             WHERE bcc.ix = bc.ix AND bcc.iy = bc.iy
+            HAVING count(*) >= $5 OR bool_or(u.public_map_eager)
+          )`,
+      [ixMin, ixMax, iyMin, iyMax, MIN_PUBLIC_CELL_USERS],
     );
     cells = res.rows.map((r) => ({
       ix: Number(r.ix),

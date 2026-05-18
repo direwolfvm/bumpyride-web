@@ -8,9 +8,14 @@ import { SharingToggle } from './SharingToggle';
 
 export const dynamic = 'force-dynamic';
 
-const MIN_PUBLIC_CELL_COUNT = Math.max(
+const MIN_PUBLIC_CELL_USERS = Math.max(
   1,
-  Number.parseInt(process.env.PUBLIC_BUMPMAP_MIN_COUNT ?? '3', 10) || 3,
+  Number.parseInt(
+    process.env.PUBLIC_BUMPMAP_MIN_USERS ??
+      process.env.PUBLIC_BUMPMAP_MIN_COUNT ??
+      '3',
+    10,
+  ) || 3,
 );
 
 export default async function PrivacySettingsPage() {
@@ -19,7 +24,7 @@ export default async function PrivacySettingsPage() {
 
   const user = await db.query.users.findFirst({
     where: eq(users.id, session.user.id),
-    columns: { shareToPublicMap: true },
+    columns: { shareToPublicMap: true, publicMapEager: true },
   });
 
   return (
@@ -41,10 +46,10 @@ export default async function PrivacySettingsPage() {
           public bump map
         </Link>{' '}
         aggregates pavement roughness across all consenting riders. Cells are
-        20 ft squares, and we only show a cell once it has at least{' '}
-        {MIN_PUBLIC_CELL_COUNT} samples — so opting in alone won&apos;t publish
-        your exact route. No timestamps, no routes, no per-user attribution are
-        ever in the public output.
+        20 ft squares, and by default we only show a cell once at least{' '}
+        {MIN_PUBLIC_CELL_USERS} distinct riders have contributed to it — so
+        opting in alone won&apos;t publish your exact route. No timestamps,
+        no routes, no per-user attribution are ever in the public output.
       </p>
       <p className="mt-3 text-text-muted">
         Only your <strong>mounted-mode</strong> rides contribute to the public
@@ -60,7 +65,18 @@ export default async function PrivacySettingsPage() {
         to the public aggregate. Toggling on backfills your eligible rides;
         toggling off removes them.
       </p>
-      <SharingToggle initial={user?.shareToPublicMap ?? false} />
+      <p className="mt-3 text-text-muted">
+        Once sharing is on, an additional <strong>eager publish</strong>{' '}
+        toggle appears. With it on, your cells render immediately instead of
+        waiting for {MIN_PUBLIC_CELL_USERS} riders — handy for seeding a
+        region with no other contributors yet, but it makes your routes
+        visible to anyone who looks. Off is the default.
+      </p>
+      <SharingToggle
+        initialShared={user?.shareToPublicMap ?? false}
+        initialEager={user?.publicMapEager ?? false}
+        minUsers={MIN_PUBLIC_CELL_USERS}
+      />
     </div>
   );
 }

@@ -34,6 +34,12 @@ export const users = pgTable('users', {
   // /api/me/sharing, which also backfills / subtracts the user's
   // bump_cells contribution to keep the aggregate consistent.
   shareToPublicMap: boolean('share_to_public_map').notNull().default(false),
+  // Per-user escape valve for the "wait until 3 distinct users have
+  // contributed before publishing a cell" rule. When TRUE, every cell
+  // this user contributes to becomes immediately public. Defaults to
+  // FALSE for both new and existing opt-ins — the privacy-tighter
+  // posture. Toggled via /api/me/sharing alongside shareToPublicMap.
+  publicMapEager: boolean('public_map_eager').notNull().default(false),
   // Per-rider pocket-mode calibration. iOS computes the gain locally
   // (median of mountedAvg/pocketAvg across overlapping cells, clamped to
   // [0.5, 5.0]) and PUTs it to /api/me/calibration. We apply the gain to
@@ -192,5 +198,25 @@ export const bumpCells = pgTable(
   },
   (t) => ({
     pk: primaryKey({ columns: [t.ix, t.iy] }),
+  }),
+);
+
+// Distinct (cell, user) pairs for cells the user is actively
+// contributing to (sharing on, mounted-or-legacy ride). Drives the
+// "show this cell once 3+ users contribute" predicate in the public
+// tile query plus the eager-publish escape valve. Kept in sync by the
+// ride sync route, sharing toggle, and (cascading) users delete.
+export const bumpCellContributors = pgTable(
+  'bump_cell_contributors',
+  {
+    ix: integer('ix').notNull(),
+    iy: integer('iy').notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ix, t.iy, t.userId] }),
+    userIdx: index('bump_cell_contributors_user_idx').on(t.userId),
   }),
 );

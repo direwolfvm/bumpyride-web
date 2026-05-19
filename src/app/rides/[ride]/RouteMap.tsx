@@ -31,12 +31,19 @@ export type BrakeMarker = {
   peakMps2: number;
 };
 
+export type CloseCallMarker = {
+  lat: number;
+  lon: number;
+};
+
 export function RouteMap({
   samples,
   brakeMarkers = [],
+  closeCallMarkers = [],
 }: {
   samples: Sample[];
   brakeMarkers?: BrakeMarker[];
+  closeCallMarkers?: CloseCallMarker[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -71,6 +78,12 @@ export function RouteMap({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [b.lon, b.lat] },
       properties: { peakMps2: b.peakMps2 },
+    }));
+
+    const closeCallFeatures: GeoJSON.Feature<GeoJSON.Point>[] = closeCallMarkers.map((c) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [c.lon, c.lat] },
+      properties: {},
     }));
 
     const map = new maplibregl.Map({
@@ -127,10 +140,43 @@ export function RouteMap({
           },
         });
       }
+
+      if (closeCallFeatures.length > 0) {
+        // Same halo + dot pattern as brakes, but violet
+        // (`#8C40D9`, matches the iOS palette) and slightly larger so
+        // close calls read as the more salient incident type.
+        map.addSource('close-calls', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: closeCallFeatures },
+        });
+        map.addLayer({
+          id: 'close-calls-halo',
+          type: 'circle',
+          source: 'close-calls',
+          paint: {
+            'circle-radius': 10,
+            'circle-color': '#ffffff',
+            'circle-opacity': 0.9,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 1,
+          },
+        });
+        map.addLayer({
+          id: 'close-calls',
+          type: 'circle',
+          source: 'close-calls',
+          paint: {
+            'circle-radius': 6,
+            'circle-color': '#8c40d9',
+            'circle-stroke-color': '#4a1d77',
+            'circle-stroke-width': 1.5,
+          },
+        });
+      }
     });
 
     return () => map.remove();
-  }, [samples, brakeMarkers]);
+  }, [samples, brakeMarkers, closeCallMarkers]);
 
   return (
     <div

@@ -299,6 +299,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Close-call events (v3). Same wipe-and-replace pattern as brakes:
+    //   undefined / null  -> ride predates the feature (or a v1.2
+    //                        device is re-syncing). Leave prior rows
+    //                        and the supported flag alone.
+    //   []                -> feature available, user didn't tap. Wipe
+    //                        any prior rows and flip supported=true.
+    //   [ ... ]           -> wipe + replace; supported=true.
+    // Note: unlike brakes there's no iOS-side backfill for legacy
+    // rides, so the supported=false state is sticky for pre-v1.3
+    // rides forever.
+    if (
+      payload.closeCallEvents !== undefined &&
+      payload.closeCallEvents !== null
+    ) {
+      await client.query(
+        'DELETE FROM close_call_events WHERE ride_uuid = $1',
+        [payload.id],
+      );
+      for (const e of payload.closeCallEvents) {
+        await client.query(
+          `INSERT INTO close_call_events (
+             ride_uuid, event_uuid, timestamp, latitude, longitude
+           ) VALUES ($1, $2, $3, $4, $5)`,
+          [payload.id, e.id, e.timestamp, e.latitude, e.longitude],
+        );
+      }
+      await client.query(
+        'UPDATE rides SET close_calls_supported = TRUE WHERE ride_uuid = $1',
+        [payload.id],
+      );
+    }
+
     // Apply bump_cells deltas. The map was built above from the
     // (wasInPublic, willBeInPublic) cases:
     //   was=T, will=T → net (new - old)         (re-sync, still eligible)

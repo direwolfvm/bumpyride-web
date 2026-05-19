@@ -88,13 +88,64 @@ export default function SupportPage() {
         </p>
       </Faq>
 
+      <Faq question="How does hard-brake detection work?">
+        <p>
+          When you save a ride, BumpyRide scans the points for sustained
+          decelerations — runs above 2.5 m/s² (≈ 0.25 g) lasting at least
+          0.8 seconds, refined with the same horizontal-acceleration
+          signal the brake detector uses live. Adjacent events within
+          three seconds collapse into a single higher-peak event. The
+          detector runs on-device, so legacy rides recorded before iOS
+          v1.3 get reprocessed in the background and re-synced to the web.
+          You&apos;ll see each ride&apos;s brakes as red dots on the route
+          map plus a list with time-into-ride and peak in g + m/s².
+        </p>
+      </Faq>
+
+      <Faq question="When should I tap “Log Close Call”?">
+        <p>
+          Whenever you feel like flagging a near-miss — a driver who cut
+          you off, a door that swung open, anything you&apos;d want
+          remembered as a dangerous spot. The button captures only
+          location and time so you can tap it without looking. A five-
+          second undo banner appears after each tap. You can also long-
+          press an entry from the ride&apos;s playback view to delete it
+          later.
+        </p>
+        <p className="mt-2">
+          Aggregated across consenting riders, close calls become an
+          obvious overlay on{' '}
+          <Link href="/map">the public map</Link> for intersections that
+          repeatedly produce them — useful as advocacy data for your
+          local cycling group or DOT.
+        </p>
+      </Faq>
+
+      <Faq question="What does the “Public map” show?">
+        <p>
+          Three layers on the same 20 ft grid, switchable via tabs on{' '}
+          <Link href="/map">the public map page</Link>:{' '}
+          <strong>Bumpiness</strong>, <strong>Hard brakes</strong>, and{' '}
+          <strong>Close calls</strong>. Each layer renders only cells
+          where at least three distinct opted-in riders have contributed
+          data on that specific layer — so a single rider can&apos;t
+          publish a route by toggling sharing on.
+        </p>
+        <p className="mt-2">
+          Toggling sharing on (or off) is one decision that covers all
+          three feature types together; there&apos;s no per-feature
+          opt-out. If you&apos;d rather not publish close calls, leave
+          sharing off entirely.
+        </p>
+      </Faq>
+
       <Faq question="How do I delete my account?">
         <p>
           A self-service delete flow is on the roadmap. In the meantime,
           email <a href="mailto:me@jordaneccl.es">me@jordaneccl.es</a>{' '}
           from the address tied to your account and we&apos;ll delete the
           account, every ride, every token, and every contribution to the
-          public bump map within seven days. We&apos;ll confirm by reply.
+          public maps within seven days. We&apos;ll confirm by reply.
         </p>
       </Faq>
 

@@ -241,8 +241,9 @@ export async function POST(req: NextRequest) {
       await client.query(
         `INSERT INTO ride_points (
            ride_uuid, idx, point_uuid, timestamp,
-           latitude, longitude, speed, bumpiness, accel_window
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           latitude, longitude, speed, bumpiness, accel_window,
+           horizontal_accel
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           payload.id,
           i,
@@ -253,7 +254,48 @@ export async function POST(req: NextRequest) {
           p.speed,
           p.bumpiness,
           p.accelWindow,
+          p.horizontalAccel ?? null,
         ],
+      );
+    }
+
+    // Brake events (v3). Three states on the payload:
+    //   undefined / null  -> iOS hasn't run the detector for this ride
+    //                        yet. Leave whatever rows already exist
+    //                        alone; flip processed only when iOS
+    //                        confirms.
+    //   []                -> ran, no events. Wipe any prior rows and
+    //                        mark processed=true.
+    //   [ ... ]           -> wipe + replace; mark processed=true.
+    // The wipe is unconditional on a non-null array so a re-upload
+    // that drops a previously-detected event (e.g. iOS detector tuning)
+    // can shrink the set.
+    if (payload.brakeEvents !== undefined && payload.brakeEvents !== null) {
+      await client.query(
+        'DELETE FROM brake_events WHERE ride_uuid = $1',
+        [payload.id],
+      );
+      for (const e of payload.brakeEvents) {
+        await client.query(
+          `INSERT INTO brake_events (
+             ride_uuid, event_uuid, timestamp,
+             latitude, longitude,
+             peak_deceleration_mps2, duration_seconds
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            payload.id,
+            e.id,
+            e.timestamp,
+            e.latitude,
+            e.longitude,
+            e.peakDecelerationMPS2,
+            e.durationSeconds,
+          ],
+        );
+      }
+      await client.query(
+        'UPDATE rides SET brake_events_processed = TRUE WHERE ride_uuid = $1',
+        [payload.id],
       );
     }
 

@@ -25,7 +25,19 @@ export type Sample = {
   tSec: number;
 };
 
-export function RouteMap({ samples }: { samples: Sample[] }) {
+export type BrakeMarker = {
+  lat: number;
+  lon: number;
+  peakMps2: number;
+};
+
+export function RouteMap({
+  samples,
+  brakeMarkers = [],
+}: {
+  samples: Sample[];
+  brakeMarkers?: BrakeMarker[];
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -55,6 +67,12 @@ export function RouteMap({ samples }: { samples: Sample[] }) {
       });
     }
 
+    const brakeFeatures: GeoJSON.Feature<GeoJSON.Point>[] = brakeMarkers.map((b) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [b.lon, b.lat] },
+      properties: { peakMps2: b.peakMps2 },
+    }));
+
     const map = new maplibregl.Map({
       container: el,
       style: basemapStyleForCurrentTheme(),
@@ -77,10 +95,42 @@ export function RouteMap({ samples }: { samples: Sample[] }) {
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': LINE_COLOR, 'line-width': 4 },
       });
+
+      if (brakeFeatures.length > 0) {
+        map.addSource('brakes', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: brakeFeatures },
+        });
+        // White halo behind a red dot so the marker stays legible on
+        // the colored route line regardless of underlying bumpiness.
+        map.addLayer({
+          id: 'brakes-halo',
+          type: 'circle',
+          source: 'brakes',
+          paint: {
+            'circle-radius': 9,
+            'circle-color': '#ffffff',
+            'circle-opacity': 0.9,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 1,
+          },
+        });
+        map.addLayer({
+          id: 'brakes',
+          type: 'circle',
+          source: 'brakes',
+          paint: {
+            'circle-radius': 5,
+            'circle-color': '#dd2222',
+            'circle-stroke-color': '#7a0d0d',
+            'circle-stroke-width': 1.5,
+          },
+        });
+      }
     });
 
     return () => map.remove();
-  }, [samples]);
+  }, [samples, brakeMarkers]);
 
   return (
     <div

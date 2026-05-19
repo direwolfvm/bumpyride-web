@@ -162,6 +162,10 @@ export const rides = pgTable(
     avgBumpiness: doublePrecision('avg_bumpiness').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    // FALSE until iOS has uploaded a (possibly empty) brakeEvents
+    // array for this ride. Distinguishes "detector hasn't run yet"
+    // from "ran and found no hard brakes" in the UI.
+    brakeEventsProcessed: boolean('brake_events_processed').notNull().default(false),
   },
   (t) => ({
     userIdx: index('rides_user_id_idx').on(t.userId, t.startedAt.desc()),
@@ -182,9 +186,36 @@ export const ridePoints = pgTable(
     speed: doublePrecision('speed').notNull(),
     bumpiness: doublePrecision('bumpiness').notNull(),
     accelWindow: real('accel_window').array().notNull().default(sql`'{}'::real[]`),
+    // Magnitude of user acceleration projected onto the plane
+    // perpendicular to gravity, g-units. iOS v1.3+. Stored so a future
+    // server-side brake re-detection has the same input the device
+    // used. Nullable for older clients and older rides.
+    horizontalAccel: doublePrecision('horizontal_accel'),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.rideUuid, t.idx] }),
+  }),
+);
+
+// Hard-brake events. Each row is a single iOS-detected braking
+// incident keyed by (ride_uuid, event_uuid). The event_uuid comes from
+// the iOS app so re-uploads stay idempotent.
+export const brakeEvents = pgTable(
+  'brake_events',
+  {
+    rideUuid: uuid('ride_uuid')
+      .notNull()
+      .references(() => rides.rideUuid, { onDelete: 'cascade' }),
+    eventUuid: uuid('event_uuid').notNull(),
+    timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
+    latitude: doublePrecision('latitude').notNull(),
+    longitude: doublePrecision('longitude').notNull(),
+    peakDecelerationMps2: doublePrecision('peak_deceleration_mps2').notNull(),
+    durationSeconds: doublePrecision('duration_seconds').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.rideUuid, t.eventUuid] }),
+    rideTsIdx: index('brake_events_ride_ts_idx').on(t.rideUuid, t.timestamp),
   }),
 );
 

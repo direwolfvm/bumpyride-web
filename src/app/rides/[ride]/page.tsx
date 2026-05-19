@@ -2,11 +2,14 @@ import { notFound, redirect } from 'next/navigation';
 import { and, asc, eq } from 'drizzle-orm';
 import { auth } from '@/auth';
 import { db } from '@/db';
-import { ridePoints, rides } from '@/db/schema';
+import { brakeEvents, ridePoints, rides } from '@/db/schema';
 import { formatDateTime, formatDistance, formatDuration } from '@/lib/formatters';
+import { BrakeEventsSection } from './BrakeEventsSection';
 import { RouteMap } from './RouteMap';
 import { BumpinessChart } from './BumpinessChart';
 import { RenameForm } from './RenameForm';
+
+const G_MPS2 = 9.80665;
 
 export const dynamic = 'force-dynamic';
 
@@ -24,16 +27,30 @@ export default async function RideDetailPage({
   });
   if (!ride) notFound();
 
-  const points = await db
-    .select({
-      latitude: ridePoints.latitude,
-      longitude: ridePoints.longitude,
-      bumpiness: ridePoints.bumpiness,
-      timestamp: ridePoints.timestamp,
-    })
-    .from(ridePoints)
-    .where(eq(ridePoints.rideUuid, rideUuid))
-    .orderBy(asc(ridePoints.idx));
+  const [points, brakeRows] = await Promise.all([
+    db
+      .select({
+        latitude: ridePoints.latitude,
+        longitude: ridePoints.longitude,
+        bumpiness: ridePoints.bumpiness,
+        timestamp: ridePoints.timestamp,
+      })
+      .from(ridePoints)
+      .where(eq(ridePoints.rideUuid, rideUuid))
+      .orderBy(asc(ridePoints.idx)),
+    db
+      .select({
+        eventUuid: brakeEvents.eventUuid,
+        timestamp: brakeEvents.timestamp,
+        latitude: brakeEvents.latitude,
+        longitude: brakeEvents.longitude,
+        peakDecelerationMps2: brakeEvents.peakDecelerationMps2,
+        durationSeconds: brakeEvents.durationSeconds,
+      })
+      .from(brakeEvents)
+      .where(eq(brakeEvents.rideUuid, rideUuid))
+      .orderBy(asc(brakeEvents.timestamp)),
+  ]);
 
   const startMs = ride.startedAt.getTime();
   const samples = points.map((p) => ({
@@ -41,6 +58,15 @@ export default async function RideDetailPage({
     lon: p.longitude,
     bumpiness: p.bumpiness,
     tSec: (p.timestamp.getTime() - startMs) / 1000,
+  }));
+  const brakes = brakeRows.map((b) => ({
+    id: b.eventUuid,
+    tSec: (b.timestamp.getTime() - startMs) / 1000,
+    lat: b.latitude,
+    lon: b.longitude,
+    peakMps2: b.peakDecelerationMps2,
+    peakG: b.peakDecelerationMps2 / G_MPS2,
+    durationSeconds: b.durationSeconds,
   }));
 
   return (
@@ -73,7 +99,14 @@ export default async function RideDetailPage({
 
       <Section title="Route">
         {samples.length > 0 ? (
-          <RouteMap samples={samples} />
+          <RouteMap
+            samples={samples}
+            brakeMarkers={brakes.map((b) => ({
+              lat: b.lat,
+              lon: b.lon,
+              peakMps2: b.peakMps2,
+            }))}
+          />
         ) : (
           <EmptyBox>No points were recorded.</EmptyBox>
         )}
@@ -85,6 +118,13 @@ export default async function RideDetailPage({
         ) : (
           <EmptyBox>No samples to chart.</EmptyBox>
         )}
+      </Section>
+
+      <Section title="Hard brakes">
+        <BrakeEventsSection
+          processed={ride.brakeEventsProcessed}
+          events={brakes}
+        />
       </Section>
     </div>
   );

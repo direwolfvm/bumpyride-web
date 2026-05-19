@@ -2,9 +2,10 @@ import { notFound, redirect } from 'next/navigation';
 import { and, asc, eq } from 'drizzle-orm';
 import { auth } from '@/auth';
 import { db } from '@/db';
-import { brakeEvents, ridePoints, rides } from '@/db/schema';
+import { brakeEvents, closeCallEvents, ridePoints, rides } from '@/db/schema';
 import { formatDateTime, formatDistance, formatDuration } from '@/lib/formatters';
 import { BrakeEventsSection } from './BrakeEventsSection';
+import { CloseCallsSection } from './CloseCallsSection';
 import { RouteMap } from './RouteMap';
 import { BumpinessChart } from './BumpinessChart';
 import { RenameForm } from './RenameForm';
@@ -27,7 +28,7 @@ export default async function RideDetailPage({
   });
   if (!ride) notFound();
 
-  const [points, brakeRows] = await Promise.all([
+  const [points, brakeRows, closeCallRows] = await Promise.all([
     db
       .select({
         latitude: ridePoints.latitude,
@@ -50,6 +51,16 @@ export default async function RideDetailPage({
       .from(brakeEvents)
       .where(eq(brakeEvents.rideUuid, rideUuid))
       .orderBy(asc(brakeEvents.timestamp)),
+    db
+      .select({
+        eventUuid: closeCallEvents.eventUuid,
+        timestamp: closeCallEvents.timestamp,
+        latitude: closeCallEvents.latitude,
+        longitude: closeCallEvents.longitude,
+      })
+      .from(closeCallEvents)
+      .where(eq(closeCallEvents.rideUuid, rideUuid))
+      .orderBy(asc(closeCallEvents.timestamp)),
   ]);
 
   const startMs = ride.startedAt.getTime();
@@ -67,6 +78,12 @@ export default async function RideDetailPage({
     peakMps2: b.peakDecelerationMps2,
     peakG: b.peakDecelerationMps2 / G_MPS2,
     durationSeconds: b.durationSeconds,
+  }));
+  const closeCalls = closeCallRows.map((c) => ({
+    id: c.eventUuid,
+    tSec: (c.timestamp.getTime() - startMs) / 1000,
+    lat: c.latitude,
+    lon: c.longitude,
   }));
 
   return (
@@ -106,6 +123,10 @@ export default async function RideDetailPage({
               lon: b.lon,
               peakMps2: b.peakMps2,
             }))}
+            closeCallMarkers={closeCalls.map((c) => ({
+              lat: c.lat,
+              lon: c.lon,
+            }))}
           />
         ) : (
           <EmptyBox>No points were recorded.</EmptyBox>
@@ -124,6 +145,13 @@ export default async function RideDetailPage({
         <BrakeEventsSection
           processed={ride.brakeEventsProcessed}
           events={brakes}
+        />
+      </Section>
+
+      <Section title="Close calls">
+        <CloseCallsSection
+          supported={ride.closeCallsSupported}
+          events={closeCalls}
         />
       </Section>
     </div>

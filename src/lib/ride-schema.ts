@@ -49,6 +49,16 @@ export const brakeEventSchema = z.object({
   durationSeconds: z.number().min(0).pipe(finite),
 });
 
+// v3 close-call event. User-initiated (tap "Log Close Call" while
+// recording). Intentionally minimal — no severity, category, or notes.
+// See bumpyride/docs/CLOSE_CALLS_WEB_HANDOFF.md.
+export const closeCallEventSchema = z.object({
+  id: z.string().uuid(),
+  timestamp: z.string().datetime({ offset: true }),
+  latitude: z.number().min(-90).max(90).pipe(finite),
+  longitude: z.number().min(-180).max(180).pipe(finite),
+});
+
 export const rideSchema = z.object({
   schemaVersion: z
     .number()
@@ -71,8 +81,17 @@ export const rideSchema = z.object({
   // Storage mirrors this via rides.brake_events_processed (false vs
   // true) plus the brake_events row count.
   brakeEvents: z.array(brakeEventSchema).nullish(),
+  // v3, optional. Three states:
+  //   - field omitted / null  -> ride predates close-call feature
+  //   - []                    -> feature available, user didn't tap
+  //   - [ ... ]               -> the close calls
+  // Storage mirrors this via rides.close_calls_supported (false vs
+  // true) plus the close_call_events row count. Unlike brake events,
+  // iOS does NOT backfill legacy rides — pre-v1.3 rides stay null.
+  closeCallEvents: z.array(closeCallEventSchema).nullish(),
 });
 
 export type RidePayload = z.infer<typeof rideSchema>;
 export type RidePointPayload = z.infer<typeof ridePointSchema>;
 export type BrakeEventPayload = z.infer<typeof brakeEventSchema>;
+export type CloseCallEventPayload = z.infer<typeof closeCallEventSchema>;

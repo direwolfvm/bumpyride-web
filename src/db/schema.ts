@@ -166,6 +166,12 @@ export const rides = pgTable(
     // array for this ride. Distinguishes "detector hasn't run yet"
     // from "ran and found no hard brakes" in the UI.
     brakeEventsProcessed: boolean('brake_events_processed').notNull().default(false),
+    // FALSE until iOS has uploaded a (possibly empty) closeCallEvents
+    // array. Distinguishes "ride predates the feature" (pre-v1.3)
+    // from "feature available, user didn't tap." iOS doesn't backfill
+    // close calls for legacy rides — pre-v1.3 rides stay supported=FALSE
+    // forever.
+    closeCallsSupported: boolean('close_calls_supported').notNull().default(false),
   },
   (t) => ({
     userIdx: index('rides_user_id_idx').on(t.userId, t.startedAt.desc()),
@@ -216,6 +222,29 @@ export const brakeEvents = pgTable(
   (t) => ({
     pk: primaryKey({ columns: [t.rideUuid, t.eventUuid] }),
     rideTsIdx: index('brake_events_ride_ts_idx').on(t.rideUuid, t.timestamp),
+  }),
+);
+
+// User-initiated close-call markers. iOS users tap "Log Close Call"
+// during recording; the snapshot is just position + time. No severity
+// or category fields by design — anything richer was hostile to
+// one-handed in-ride interaction. Same key shape as brake_events so
+// the ride-detail page and any future aggregate joins can reuse the
+// same access patterns.
+export const closeCallEvents = pgTable(
+  'close_call_events',
+  {
+    rideUuid: uuid('ride_uuid')
+      .notNull()
+      .references(() => rides.rideUuid, { onDelete: 'cascade' }),
+    eventUuid: uuid('event_uuid').notNull(),
+    timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
+    latitude: doublePrecision('latitude').notNull(),
+    longitude: doublePrecision('longitude').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.rideUuid, t.eventUuid] }),
+    rideTsIdx: index('close_call_events_ride_ts_idx').on(t.rideUuid, t.timestamp),
   }),
 );
 

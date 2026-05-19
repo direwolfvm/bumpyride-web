@@ -4,7 +4,7 @@ import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
   description:
-    'BumpyRide is a road-roughness tracker: an iPhone app for recording rides, plus a web app for syncing, browsing, and contributing to a public bump map.',
+    'BumpyRide is a cycling road-quality tracker: an iPhone app that captures pavement roughness, hard-brake events, and rider-tapped close calls, plus a web app for syncing, browsing, and contributing to three public-aggregated safety layers.',
 };
 
 export default function Home() {
@@ -24,9 +24,10 @@ export default function Home() {
         </h1>
         <p className="mt-4 max-w-xl text-lg text-text-muted">
           BumpyRide turns a cycling commute into data. Your phone records
-          vertical acceleration alongside GPS, your rides build into a heat
-          map at 20 ft resolution, and consenting riders contribute to a
-          public map of pavement quality across the city.
+          vertical acceleration alongside GPS, detects hard brakes
+          post-hoc, and lets you tap to log near-misses while you ride.
+          Three public maps — pavement bumpiness, hard brakes, and close
+          calls — aggregate across consenting riders at 20 ft resolution.
         </p>
       </header>
 
@@ -43,10 +44,17 @@ export default function Home() {
           gets one.
         </p>
         <p className="mt-3">
-          Over many rides those samples accumulate into 20-foot grid cells.
+          When you finish a ride, the app sweeps the points for sustained
+          decelerations and tags them as <em>hard brakes</em>. During the
+          ride you can also tap <em>Log Close Call</em> to flag a near-miss
+          on the spot — minimal interaction so it works one-handed.
+        </p>
+        <p className="mt-3">
+          Over many rides those signals accumulate into 20-foot grid cells.
           Useful for finding the smoother route to work, flagging streets
-          for repair, or simply understanding what your commute is
-          actually like.
+          for repair, mapping intersections that consistently force hard
+          brakes, or simply understanding what your commute is actually
+          like.
         </p>
       </section>
 
@@ -83,6 +91,18 @@ export default function Home() {
             score, alongside a color-coded route polyline that turns red
             (then purple) as the pavement gets worse.
           </Feature>
+          <Feature title="Hard-brake detection">
+            Post-ride sweep of GPS-derived deceleration plus horizontal
+            user-acceleration, picking out sustained brakes above
+            2.5 m/s² (0.25 g) lasting 0.8 s or more. Rides re-run through
+            the detector on app launch so legacy rides get backfilled.
+          </Feature>
+          <Feature title="Log Close Call">
+            One-handed button you can tap mid-ride to mark a near-miss in
+            place. Five-second undo. No severity slider or notes — just
+            id + time + location, intentionally minimal so the
+            interaction stays safe.
+          </Feature>
           <Feature title="Saved rides">
             Editable titles, scrubbable playback with the chart and zoom,
             trim and split, plus export-to-Photos for a clean shareable image
@@ -108,24 +128,26 @@ export default function Home() {
         <ul className="mt-4 space-y-3">
           <Feature title="Mirror of your rides">
             Every ride synced from your phone shows up here with the same
-            colored route, a bumpiness-over-time chart, and inline title
-            editing. Web edits and iOS edits both go through the same
-            schema, so renames stay in sync.
+            colored route, a bumpiness-over-time chart, red dots for the
+            ride&apos;s hard brakes, violet diamonds for any close calls
+            you logged, and inline title editing. Web edits and iOS edits
+            both go through the same schema, so renames stay in sync.
           </Feature>
           <Feature title="Your bump map">
             Same 20 ft grid as the phone, same purple-glow halo, but in your
             browser. Built from a per-user aggregate so it only ever shows
             your own rides.
           </Feature>
-          <Feature title="Public aggregated map">
-            Anonymous, no account needed. Cells appear only after they have at
-            least 3 samples — so a single rider&apos;s solo route never
-            publishes on its own. Only mounted-mode rides contribute (matching
-            the iOS Bump Map&apos;s default filter), so the public data
-            reflects calibrated sensor readings rather than pocket-damped
-            ones. No timestamps, no routes, no per-user attribution.{' '}
+          <Feature title="Public aggregated maps">
+            Anonymous, no account needed. Three layers on the same 20 ft
+            cell grid — pavement bumpiness, hard brakes, and close calls
+            — switchable via tabs. Each cell appears only after at least
+            three distinct riders have contributed, so a single rider&apos;s
+            data never publishes on its own. Only mounted-mode rides
+            contribute (matching the iOS Bump Map&apos;s default filter).
+            No timestamps, no routes, no per-user attribution.{' '}
             <Link href="/map" className="hover:underline">
-              See the live map →
+              See the live maps →
             </Link>
           </Feature>
           <Feature title="iOS sync">
@@ -148,20 +170,18 @@ export default function Home() {
           Privacy by default
         </h2>
         <p className="mt-3">
-          Your rides are yours. Contributing to the public map is{' '}
+          Your rides are yours. Contributing to the public maps is{' '}
           <strong>off by default</strong> — you turn it on at{' '}
           <Link href="/settings/privacy" className="hover:underline">
             /settings/privacy
           </Link>
-          . Even when on, only the aggregated cells leave your account:
+          . Even when on, only aggregated cells leave your account:
           never your route, never your timestamps, never anything that
-          traces back to you individually. Toggling sharing off subtracts
-          your contributions; we maintain the invariant{' '}
-          <code className="rounded bg-surface-2 px-1.5 py-0.5 text-sm">
-            public cells = sum of mounted-or-legacy points from opted-in users
-          </code>{' '}
-          at all times. Pocket-mode rides stay in your personal view and
-          never reach the public aggregate.
+          traces back to you individually. The same threshold applies
+          per-feature, so a single brake event or close call on a quiet
+          corner is held back from the public map until at least three
+          distinct riders have hit that cell. Pocket-mode rides stay in
+          your personal view and never reach the public aggregate.
         </p>
         <p className="mt-3">
           API tokens for the iOS app are hashed at rest with sha256; the

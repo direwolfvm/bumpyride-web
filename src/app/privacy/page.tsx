@@ -10,7 +10,7 @@ const EFFECTIVE_DATE = 'May 14, 2026';
 export const metadata: Metadata = {
   title: 'Privacy policy',
   description:
-    'How the BumpyRide iOS app and bumpyride.me handle your data: what is collected, what leaves your device, what appears on the public map, and how to delete it.',
+    'How the BumpyRide iOS app and bumpyride.me handle your data: what is collected, what leaves your device, what appears on the public maps (bumpiness, hard brakes, close calls), and how to delete it.',
 };
 
 export default function PrivacyPage() {
@@ -43,13 +43,25 @@ export default function PrivacyPage() {
         <li>
           Accelerometer-derived vibration data — raw vertical-axis samples at
           50 Hz, retained as 5-second windows attached to each saved location
-          point.
+          point. From iOS v1.3 onwards a per-point horizontal-acceleration
+          magnitude is also stored, used by the on-device brake detector.
         </li>
         <li>A timestamp for each sample.</li>
         <li>A user-chosen title for the ride.</li>
         <li>
           A binary tag indicating whether the phone was on the rider&apos;s
           body (pocket mode) or on a fixed bike mount.
+        </li>
+        <li>
+          <strong>Hard-brake events</strong> (iOS v1.3+) — id, timestamp,
+          location, peak deceleration, and duration for every sustained
+          brake the on-device detector finds when the ride saves.
+        </li>
+        <li>
+          <strong>Close-call markers</strong> (iOS v1.3+) — id, timestamp,
+          and location for every near-miss you flag during a ride by
+          tapping <em>Log Close Call</em>. No severity, category, or
+          notes are captured.
         </li>
       </Ul>
       <p>The app also stores a few preferences on the device:</p>
@@ -92,8 +104,11 @@ export default function PrivacyPage() {
         <li>
           <strong>Each saved ride</strong> — POSTed to{' '}
           <code>/api/sync/ride</code> and stored server-side. This includes
-          everything listed above (GPS, accelerometer windows, timestamps,
-          title, and pocket-mode tag).
+          everything listed above: GPS, accelerometer windows, timestamps,
+          title, pocket-mode tag, plus (from iOS v1.3) per-point
+          horizontal-acceleration, the ride&apos;s hard-brake events, and
+          any close-call markers you logged. Deleting a close call on iOS
+          re-syncs the ride with the marker gone.
         </li>
         <li>
           <strong>Your pocket-mode calibration</strong> — a single per-user
@@ -110,40 +125,60 @@ export default function PrivacyPage() {
         </li>
       </Ul>
 
-      <H2>What appears on the public bump map</H2>
+      <H2>What appears on the public maps</H2>
       <p>
         Contributing to the{' '}
-        <Link href="/map">public bump map</Link> is{' '}
+        <Link href="/map">public maps</Link> is{' '}
         <strong>off by default</strong>. Turn it on at{' '}
         <Link href="/settings/privacy">/settings/privacy</Link>.
       </p>
       <p>If — and only if — you have opted in:</p>
       <Ul>
         <li>
-          Your rides contribute to a public aggregate at{' '}
-          <Link href="/map">bumpyride.me/map</Link>.
+          Your rides contribute to three public aggregates on{' '}
+          <Link href="/map">bumpyride.me/map</Link>, accessible from a
+          single tab switcher: <strong>Bumpiness</strong> (average road
+          roughness per cell), <strong>Hard brakes</strong> (count of
+          detected brake events per cell), and <strong>Close calls</strong>{' '}
+          (count of rider-tapped close calls per cell). All three share
+          the same 20 ft grid.
         </li>
         <li>
-          The aggregate is per-cell averages of bumpiness at ~20 ft spatial
-          resolution. Cells with fewer than 3 samples (across all
-          contributing users) are not displayed.
+          A cell appears on a layer only after at least 3 distinct riders
+          have contributed data to it on <em>that specific layer</em>. A
+          user&apos;s bumpiness contribution doesn&apos;t unlock their
+          one-off brake event or close call on a sparse cell — the
+          threshold applies per feature.
+        </li>
+        <li>
+          A per-user <em>eager publish</em> toggle exists alongside the
+          sharing toggle. With it on, your own contributions appear
+          immediately without waiting for other riders — handy for seeding
+          a region with no other contributors yet, but it makes your
+          routes inferable to anyone who looks. Off is the default.
         </li>
         <li>
           <strong>
             No personally identifying data, no routes, no timestamps, and no
             per-user attribution
           </strong>{' '}
-          are included in the public aggregate. The public map shows only the
-          summed-and-averaged numeric bumpiness per cell.
+          are included in the public output. Each layer shows only the
+          summed-and-averaged or counted numbers per cell.
         </li>
         <li>
           Only mounted-mode rides contribute (matching the iOS Bump Map&apos;s
-          default filter); pocket-mode rides never reach the public aggregate.
+          default filter); pocket-mode rides never reach the public
+          aggregates.
+        </li>
+        <li>
+          One toggle controls all three features at once — there&apos;s no
+          per-feature opt-out. If you don&apos;t want close calls or brake
+          events publishable but want bumpiness to be, turn sharing off.
         </li>
       </Ul>
       <p>
         Toggling sharing off triggers an immediate, atomic subtraction of
-        your contributions from the public aggregate.
+        your contributions from all three public aggregates.
       </p>
 
       <H2>Retention and deletion</H2>

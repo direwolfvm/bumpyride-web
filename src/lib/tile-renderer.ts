@@ -203,3 +203,75 @@ export function renderTile(
 
   return canvas.toBuffer('image/png');
 }
+
+// ---------------------------------------------------------------------------
+// Incident tiles — brake events and close-call events.
+//
+// Renders one filled circle per cell with a count-based color ramp. Discrete
+// (not interpolated) thresholds mirror BrakeMapTileOverlay.swift / the
+// close-call equivalent on iOS, so a busy cell looks the same on every
+// surface.
+//
+// 1 event       → yellow
+// 2–3 events    → orange
+// 4–5 events    → red
+// 6+ events     → purple
+// ---------------------------------------------------------------------------
+
+export type IncidentCell = { ix: number; iy: number; count: number };
+
+const INCIDENT_ALPHA = 0.85;
+
+function incidentColor(count: number): string {
+  if (count >= 6) return `rgba(170, 0, 221, ${INCIDENT_ALPHA})`;     // purple
+  if (count >= 4) return `rgba(221, 34, 34, ${INCIDENT_ALPHA})`;     // red
+  if (count >= 2) return `rgba(255, 119, 0, ${INCIDENT_ALPHA})`;     // orange
+  return `rgba(255, 187, 0, ${INCIDENT_ALPHA})`;                     // yellow
+}
+
+// Tile-pixel radius for incident circles. Picked to stay readable at the
+// zoom levels users typically browse the public map at (z=13–18) while
+// still allowing cluster visibility at lower zooms.
+const INCIDENT_BASE_RADIUS_PX = 6;
+
+export function renderIncidentTile(
+  z: number,
+  x: number,
+  y: number,
+  cells: IncidentCell[],
+): Buffer {
+  if (cells.length === 0) return EMPTY_TILE;
+
+  const canvas = createCanvas(TILE_SIZE, TILE_SIZE);
+  const ctx = canvas.getContext('2d');
+
+  // Scale circles up a little at higher zoom so individual events read as
+  // distinct rather than dotted-pattern noise, but cap so they don't bleed
+  // into adjacent cells.
+  const radius = Math.min(10, INCIDENT_BASE_RADIUS_PX + Math.max(0, z - 14));
+
+  for (const c of cells) {
+    if (c.count <= 0) continue;
+    const origin = cellOrigin(c.ix, c.iy);
+    const center = lonLatToTilePx(
+      z,
+      x,
+      y,
+      origin.lon + CELL_LON_DEG / 2,
+      origin.lat + CELL_LAT_DEG / 2,
+    );
+    // White halo (1.5 px wider) underneath for legibility on dark or busy
+    // basemaps.
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, radius + 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = incidentColor(c.count);
+    ctx.fill();
+  }
+
+  return canvas.toBuffer('image/png');
+}

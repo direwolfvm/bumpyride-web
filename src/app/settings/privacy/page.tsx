@@ -38,18 +38,26 @@ export default async function PrivacySettingsPage() {
         see the <Link href="/privacy" className="text-accent hover:underline">privacy policy</Link>.
       </p>
       <h2 className="mt-8 text-sm font-medium uppercase tracking-wide text-text-muted">
-        Contribute to the public bump map
+        Contribute to the public maps
       </h2>
       <p className="mt-2 text-text-muted">
         The{' '}
         <Link href="/map" className="text-accent hover:underline">
-          public bump map
+          public map
         </Link>{' '}
-        aggregates pavement roughness across all consenting riders. Cells are
-        20 ft squares, and by default we only show a cell once at least{' '}
-        {MIN_PUBLIC_CELL_USERS} distinct riders have contributed to it — so
-        opting in alone won&apos;t publish your exact route. No timestamps,
-        no routes, no per-user attribution are ever in the public output.
+        has three layers — pavement bumpiness, hard brakes, and close
+        calls — all aggregated across consenting riders on the same 20 ft
+        cell grid. One toggle covers all three: opting in shares your
+        eligible bumpiness samples, your iOS-detected brake events, and
+        your tapped close-call markers collectively. There&apos;s no
+        per-feature opt-out.
+      </p>
+      <p className="mt-3 text-text-muted">
+        By default a cell only appears on any layer once at least{' '}
+        {MIN_PUBLIC_CELL_USERS} distinct riders have contributed to it —
+        so opting in alone won&apos;t publish your exact route. No
+        timestamps, no routes, no per-user attribution are ever in the
+        public output.
       </p>
       <p className="mt-3 text-text-muted">
         Only your <strong>mounted-mode</strong> rides contribute to the public

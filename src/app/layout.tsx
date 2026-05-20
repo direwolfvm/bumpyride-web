@@ -111,7 +111,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <footer className="mx-auto mt-12 max-w-7xl border-t border-border px-4 py-6 text-sm text-text-muted sm:px-6">
           <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
             <div>
-              © {new Date().getFullYear()} BumpyRide. Built in the open at{' '}
+              © {new Date().getFullYear()} Herbert Industries. Built in the
+              open at{' '}
               <a
                 href="https://github.com/direwolfvm/bumpyride-web"
                 className="hover:underline"
@@ -127,6 +128,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
               <Link href="/support" className="hover:underline">
                 Support
               </Link>
+              <a
+                href="https://github.com/direwolfvm/bumpyride-web/blob/main/LICENSE"
+                className="hover:underline"
+              >
+                License
+              </a>
               <a
                 href="mailto:me@jordaneccl.es"
                 className="hover:underline"

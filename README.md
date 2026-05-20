@@ -214,3 +214,9 @@ gcloud run jobs execute bumpyride-migrate --project=bumpyride --region=us-east4 
 ```
 
 Useful if you've applied a hot-fix migration directly to `migrations/` and need to run it before the next code change ships.
+
+## License
+
+Source-available under [PolyForm Noncommercial 1.0.0](./LICENSE) — read it, modify it, contribute, use it personally and educationally. Any commercial use requires a separate license; reach out at me@jordaneccl.es.
+
+This matches the iOS app at [direwolfvm/bumpyride](https://github.com/direwolfvm/bumpyride/blob/main/LICENSE).

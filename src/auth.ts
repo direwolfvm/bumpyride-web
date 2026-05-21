@@ -50,6 +50,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           where: eq(users.email, email),
         });
         if (!row || !row.passwordHash) return null;
+        // Anonymized users are orphan rows that exist only to hold
+        // public-map data — no sign-in path should ever issue a
+        // session for one, even if a credential somehow matched.
+        if (row.anonymizedAt) return null;
 
         const ok = await bcrypt.compare(password, row.passwordHash);
         if (!ok) return null;

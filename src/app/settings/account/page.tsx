@@ -5,6 +5,7 @@ import { auth } from '@/auth';
 import { db } from '@/db';
 import { accounts, users } from '@/db/schema';
 import { ProfileForm, PasswordForm } from './AccountForms';
+import { DangerZone } from './DangerZone';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +16,12 @@ export default async function AccountPage() {
 
   const user = await db.query.users.findFirst({
     where: eq(users.id, userId),
-    columns: { name: true, email: true, passwordHash: true },
+    columns: {
+      name: true,
+      email: true,
+      passwordHash: true,
+      shareToPublicMap: true,
+    },
   });
   const linkedAccounts = await db
     .select({ provider: accounts.provider })
@@ -115,6 +121,11 @@ export default async function AccountPage() {
           so you can reset your password if you forget it.
         </p>
       </section>
+
+      <DangerZone
+        email={user.email}
+        isSharing={user.shareToPublicMap}
+      />
     </div>
   );
 }

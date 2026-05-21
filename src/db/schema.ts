@@ -53,6 +53,14 @@ export const users = pgTable('users', {
   // at setup, so an abandoned setup doesn't lock anyone out.
   totpSecret: bytea('totp_secret'),
   totpEnabled: boolean('totp_enabled').notNull().default(false),
+  // Marks a user row as an orphan that exists only to hold public-map
+  // contributions detached from a real account. Set when a user runs
+  // clear-data or delete-account with `keepPublicContributions: true`;
+  // the original account row is then either reset (clear-data) or
+  // deleted (delete-account), and this fresh anonymized row inherits
+  // the rides + bump_cell_contributors. Auth layer rejects sign-in
+  // attempts for any row where this is non-null.
+  anonymizedAt: timestamp('anonymized_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

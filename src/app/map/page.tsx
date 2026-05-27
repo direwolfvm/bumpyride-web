@@ -47,7 +47,8 @@ export default async function PublicMapPage() {
       <p className="mt-2 max-w-3xl text-text-muted">
         Three views of the same 20 ft cell grid, aggregated across every rider
         who&apos;s opted in to public sharing — mounted-sensor data only.
-        Switch layers with the tabs below.
+        Switch layers with the first tab strip; switch time windows with the
+        second.
       </p>
       <ul className="mt-3 max-w-3xl space-y-1 text-sm text-text-muted">
         <li>
@@ -61,6 +62,22 @@ export default async function PublicMapPage() {
         <li>
           <strong>Close calls</strong> — count of rider-tapped near-miss
           markers per cell.
+        </li>
+      </ul>
+      <ul className="mt-3 max-w-3xl space-y-1 text-sm text-text-muted">
+        <li>
+          <strong>All data</strong> — the lifetime aggregate. Stable,
+          slow-moving signal.
+        </li>
+        <li>
+          <strong>Last 3 months</strong> — only data recorded in the last
+          three calendar months. Surfaces newly-patched (or newly-worn)
+          pavement and recent incident hotspots.
+        </li>
+        <li>
+          <strong>Last 10 observations</strong> — only the ten most recent
+          samples per cell, regardless of when they were recorded. Best
+          read on what each cell looks like right now.
         </li>
       </ul>
       <p className="mt-3 max-w-3xl text-text-muted">

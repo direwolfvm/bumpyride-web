@@ -88,7 +88,16 @@ export default async function RideDetailPage({
 
   return (
     <div className="mx-auto max-w-5xl">
-      <RenameForm rideUuid={ride.rideUuid} initialTitle={ride.title} />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <RenameForm rideUuid={ride.rideUuid} initialTitle={ride.title} />
+        <a
+          href={`/api/me/rides/${ride.rideUuid}/export`}
+          className="rounded border border-border-strong px-3 py-1.5 text-sm text-text-muted hover:border-accent hover:text-text"
+          download
+        >
+          Export ride (JSON)
+        </a>
+      </div>
 
       <dl className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3 lg:grid-cols-4">
         <Stat label="Started" value={formatDateTime(ride.startedAt)} />

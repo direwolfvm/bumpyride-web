@@ -1,6 +1,7 @@
 import { count, max, min, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { bumpCells } from '@/db/schema';
+import { ExportControls } from '@/components/ExportControls';
 import { PublicBumpMap } from './PublicBumpMap';
 import { CELL_LAT_DEG, CELL_LON_DEG } from '@/lib/bump-grid';
 
@@ -88,6 +89,16 @@ export default async function PublicMapPage() {
         as mounted, matching the iOS Bump Map&apos;s default filter. No
         timestamps, no routes, no per-user attribution.
       </p>
+
+      {hasData && (
+        <ExportControls
+          endpoint="/api/public-map/export"
+          kindHelp={{
+            raw: 'Per-cell aggregates only. Bumpiness sum + count per cell, brake counts per cell, close-call counts per cell. Per-event records are deliberately omitted — they would compromise the 3-distinct-rider privacy gate.',
+            display: 'Same per-cell numbers, plus average bumpiness and the rendered color bin (yellow → purple) so consumers can reproduce the on-screen color.',
+          }}
+        />
+      )}
 
       <div className="mt-6">
         {hasData ? (

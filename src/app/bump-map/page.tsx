@@ -4,6 +4,7 @@ import { count, eq, max, min } from 'drizzle-orm';
 import { auth } from '@/auth';
 import { db } from '@/db';
 import { ridePoints, rides } from '@/db/schema';
+import { ExportControls } from '@/components/ExportControls';
 import { PrivateBumpMap } from './PrivateBumpMap';
 
 export const dynamic = 'force-dynamic';
@@ -42,6 +43,15 @@ export default async function BumpMapPage() {
         Cells are 20 ft on a side, anchored to the same grid the iOS app uses,
         so cells match across web and device exactly.
       </p>
+      {hasData && (
+        <ExportControls
+          endpoint="/api/me/bump-map/export"
+          kindHelp={{
+            raw: 'Every individual ride point, brake event, and close-call marker you own — including timestamps and accelerometer windows. Same shape per-record as the iOS sync payload.',
+            display: 'Per-cell aggregates: bumpiness sum/count/average, brake count, close-call count per 20 ft cell.',
+          }}
+        />
+      )}
       <div className="mt-6">
         {hasData ? (
           <PrivateBumpMap

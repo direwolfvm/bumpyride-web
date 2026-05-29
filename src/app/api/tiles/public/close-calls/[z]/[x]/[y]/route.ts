@@ -11,8 +11,8 @@ import {
   parseTileMode,
   parseTilePercentile,
   type TileMode,
-  type TilePercentile,
 } from '@/lib/tile-mode';
+import { getOrComputeThreshold, NO_DATA_THRESHOLD } from '@/lib/percentile-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,7 +20,11 @@ export const dynamic = 'force-dynamic';
 // Public close-call tile renderer. Same shape as the brake tile route
 // — different source table, same per-feature 3-distinct-rider gate.
 //
-// Accepts ?mode= and ?percentile= with identical semantics.
+// Accepts ?mode= and ?percentile= with identical semantics. Threshold
+// for top10/bottom10 is memoised in src/lib/percentile-cache.ts —
+// the per-tile query just pulls the gate-passing cells in this
+// tile's bbox and filters by the cached cutoff in JS. Same pattern
+// as the personal user tile route's hotfix.
 
 const MIN_PUBLIC_CELL_USERS = Math.max(
   1,
@@ -40,7 +44,7 @@ const PNG_HEADERS = {
 const respondTile = (png: Buffer, status = 200) =>
   new Response(new Uint8Array(png), { status, headers: PNG_HEADERS });
 
-function cellsCte(mode: TileMode): string {
+function cellsCteSource(mode: TileMode): string {
   const filter =
     mode === '3mo' ? "AND c.timestamp > now() - interval '3 months'" : '';
   const sourceCte = `
@@ -81,33 +85,6 @@ function cellsCte(mode: TileMode): string {
   `;
 }
 
-function finalSql(mode: TileMode, percentile: TilePercentile): string {
-  if (percentile === 'all') {
-    return `
-      WITH cells AS (${cellsCte(mode)})
-      SELECT ix, iy, count
-        FROM cells
-       WHERE ix BETWEEN $1 AND $2
-         AND iy BETWEEN $3 AND $4
-    `;
-  }
-  const pred = percentile === 'top10' ? 'c.count <= t.lo' : 'c.count >= t.hi';
-  return `
-    WITH cells AS (${cellsCte(mode)}),
-         threshold AS (
-           SELECT
-             percentile_cont(0.1) WITHIN GROUP (ORDER BY count) AS lo,
-             percentile_cont(0.9) WITHIN GROUP (ORDER BY count) AS hi
-           FROM cells
-         )
-    SELECT c.ix, c.iy, c.count
-      FROM cells c, threshold t
-     WHERE c.ix BETWEEN $1 AND $2
-       AND c.iy BETWEEN $3 AND $4
-       AND ${pred}
-  `;
-}
-
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ z: string; x: string; y: string }> },
@@ -133,9 +110,15 @@ export async function GET(
 
   let cells: IncidentCell[];
   try {
-    const sql = finalSql(mode, percentile);
+    const bboxSql = `
+      WITH cells AS (${cellsCteSource(mode)})
+      SELECT ix, iy, count
+        FROM cells
+       WHERE ix BETWEEN $1 AND $2
+         AND iy BETWEEN $3 AND $4
+    `;
     const res = await pool.query<{ ix: number; iy: number; count: number }>(
-      sql,
+      bboxSql,
       [ixMin, ixMax, iyMin, iyMax],
     );
     cells = res.rows.map((r) => ({
@@ -143,6 +126,29 @@ export async function GET(
       iy: Number(r.iy),
       count: Number(r.count),
     }));
+
+    if (percentile !== 'all') {
+      const threshold = await getOrComputeThreshold(
+        `public:close-calls:${mode}`,
+        async (client) => {
+          const r = await client.query<{ lo: number | null; hi: number | null }>(
+            `WITH cells AS (${cellsCteSource(mode)})
+             SELECT
+               percentile_cont(0.1) WITHIN GROUP (ORDER BY count) AS lo,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY count) AS hi
+             FROM cells`,
+          );
+          const row = r.rows[0];
+          if (!row || row.lo == null || row.hi == null) {
+            return NO_DATA_THRESHOLD;
+          }
+          return { lo: Number(row.lo), hi: Number(row.hi) };
+        },
+      );
+      cells = cells.filter((c) =>
+        percentile === 'top10' ? c.count <= threshold.lo : c.count >= threshold.hi,
+      );
+    }
   } catch (err) {
     console.error('public close-call tile query failed', err);
     return respondTile(emptyTilePng(), 500);

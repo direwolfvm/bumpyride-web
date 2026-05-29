@@ -7,32 +7,31 @@ import {
   tileQueryBbox,
   type Cell,
 } from '@/lib/tile-renderer';
-import { parseTileMode, type TileMode } from '@/lib/tile-mode';
+import {
+  parseTileMode,
+  parseTilePercentile,
+  type TileMode,
+  type TilePercentile,
+} from '@/lib/tile-mode';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 // Public aggregated bump-map tiles. Anonymous access.
 //
-// Accepts ?mode=all|3mo|last10. The mode picks which underlying data
-// feeds the per-cell average:
-//   all     — the maintained `bump_cells` aggregate (cheap, every
-//             eligible sample ever recorded).
-//   3mo     — scan ride_points in bbox, restrict to the last 3
-//             months, group + privacy-gate at query time.
-//   last10  — scan ride_points in bbox, take the 10 most recent
-//             samples per cell, group + privacy-gate.
+// Accepts two query parameters:
+//   ?mode=all|3mo|last10        time window (see lib/tile-mode.ts)
+//   ?percentile=all|top10|bottom10
+//       all      — render every gate-passing cell.
+//       top10    — only cells whose avg bumpiness is <= the 10th
+//                  percentile across the whole dataset (= smoothest).
+//       bottom10 — only cells whose avg bumpiness is >= the 90th
+//                  percentile (= roughest).
 //
-// A cell renders if EITHER
-//   (a) at least MIN_PUBLIC_CELL_USERS distinct sharing users have
-//       contributed to it (in the chosen mode), OR
-//   (b) at least one of its contributors has `public_map_eager = TRUE`
-//       (the per-user escape valve — e.g. for power users seeding a
-//       brand-new region).
-//
-// The threshold is configurable via env so we can dial it in as the
-// user base grows. The legacy `PUBLIC_BUMPMAP_MIN_COUNT` env var is
-// still read for back-compat with deployments that haven't migrated.
+// Privacy gate (3 distinct sharing users OR any one with
+// public_map_eager) applies in every mode; percentile is computed
+// AFTER the gate, so the "best/worst 10%" claim is about publishable
+// cells specifically.
 
 const MIN_PUBLIC_CELL_USERS = Math.max(
   1,
@@ -46,14 +45,18 @@ const MIN_PUBLIC_CELL_USERS = Math.max(
 
 const PNG_HEADERS = {
   'Content-Type': 'image/png',
-  // Same content for every viewer; can cache aggressively at the edge.
   'Cache-Control': 'public, max-age=3600, s-maxage=3600',
 } as const;
 
 const respondTile = (png: Buffer, status = 200) =>
   new Response(new Uint8Array(png), { status, headers: PNG_HEADERS });
 
-async function queryAllMode(args: {
+// All-mode + percentile=all is the hot path: a direct bbox lookup
+// against the maintained bump_cells aggregate with the gate. The
+// other combinations re-aggregate from ride_points and/or compute
+// percentile thresholds at query time.
+
+async function queryAllModeFast(args: {
   west: number;
   east: number;
   south: number;
@@ -85,68 +88,126 @@ async function queryAllMode(args: {
   }));
 }
 
-async function queryWindowedMode(
-  mode: '3mo' | 'last10',
-  args: { west: number; east: number; south: number; north: number },
-): Promise<Cell[]> {
-  // Both modes scan ride_points by bbox + privacy filters, then
-  // diverge on the inner filter / window. The bump_cells aggregate
-  // can't help here — we re-aggregate on the fly so the time window
-  // is honored.
-  const sourceCte = (extraFilter = '') => `
-    WITH sample_cells AS (
-      SELECT
-        floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
-        floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
-        rp.bumpiness,
-        rp.timestamp,
-        r.user_id,
-        u.public_map_eager
-      FROM ride_points rp
-      JOIN rides r ON r.ride_uuid = rp.ride_uuid
-      JOIN users u ON u.id = r.user_id
-      WHERE u.share_to_public_map = TRUE
-        AND r.pocket_mode IS DISTINCT FROM TRUE
-        AND rp.longitude BETWEEN $1 AND $2
-        AND rp.latitude  BETWEEN $3 AND $4
-        ${extraFilter}
-    )
-  `;
-  let sql: string;
-  if (mode === '3mo') {
-    sql = `
-      ${sourceCte("AND rp.timestamp > now() - interval '3 months'")}
-      SELECT ix, iy,
-             sum(bumpiness)::float8 AS sum,
-             count(*)::bigint       AS count
-        FROM sample_cells
-       GROUP BY ix, iy
-      HAVING count(DISTINCT user_id) >= $5 OR bool_or(public_map_eager)
+// Builds the gate-passing per-cell CTE for a given mode. Used by both
+// the windowed-mode path and the percentile path so they apply the
+// same privacy + mode filter.
+function cellsCteSource(mode: TileMode): string {
+  if (mode === 'all') {
+    // Use the maintained aggregate; gate via EXISTS.
+    return `
+      SELECT bc.ix, bc.iy, bc.sum::float8 AS sum, bc.count::bigint AS count
+        FROM bump_cells bc
+       WHERE EXISTS (
+         SELECT 1
+           FROM bump_cell_contributors bcc
+           JOIN users u ON u.id = bcc.user_id
+          WHERE bcc.ix = bc.ix AND bcc.iy = bc.iy
+         HAVING count(*) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(u.public_map_eager)
+       )
     `;
-  } else {
-    sql = `
-      ${sourceCte()}
-      , ranked AS (
-        SELECT *,
-               row_number() OVER (PARTITION BY ix, iy ORDER BY timestamp DESC) AS rn
-          FROM sample_cells
-      )
+  }
+  const filter = mode === '3mo' ? "AND rp.timestamp > now() - interval '3 months'" : '';
+  const inner = `
+    SELECT
+      floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
+      floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+      rp.bumpiness,
+      rp.timestamp,
+      r.user_id,
+      u.public_map_eager
+    FROM ride_points rp
+    JOIN rides r ON r.ride_uuid = rp.ride_uuid
+    JOIN users u ON u.id = r.user_id
+    WHERE u.share_to_public_map = TRUE
+      AND r.pocket_mode IS DISTINCT FROM TRUE
+      ${filter}
+  `;
+  if (mode === 'last10') {
+    return `
+      WITH sc AS (${inner}),
+           ranked AS (
+             SELECT *, row_number() OVER (PARTITION BY ix, iy ORDER BY timestamp DESC) AS rn
+               FROM sc
+           )
       SELECT ix, iy,
              sum(bumpiness)::float8 AS sum,
              count(*)::bigint       AS count
         FROM ranked
        WHERE rn <= 10
        GROUP BY ix, iy
-      HAVING count(DISTINCT user_id) >= $5 OR bool_or(public_map_eager)
+      HAVING count(DISTINCT user_id) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(public_map_eager)
     `;
   }
-  const res = await pool.query<Cell>(sql, [
-    args.west,
-    args.east,
-    args.south,
-    args.north,
-    MIN_PUBLIC_CELL_USERS,
-  ]);
+  // mode === '3mo'
+  return `
+    WITH sc AS (${inner})
+    SELECT ix, iy,
+           sum(bumpiness)::float8 AS sum,
+           count(*)::bigint       AS count
+      FROM sc
+     GROUP BY ix, iy
+    HAVING count(DISTINCT user_id) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(public_map_eager)
+  `;
+}
+
+async function queryWindowedMode(
+  mode: '3mo' | 'last10',
+  args: { west: number; east: number; south: number; north: number },
+): Promise<Cell[]> {
+  const sql = `
+    WITH cells AS (${cellsCteSource(mode)})
+    SELECT ix, iy, sum, count
+      FROM cells
+     WHERE ix BETWEEN $1 AND $2
+       AND iy BETWEEN $3 AND $4
+  `;
+  // We pass bbox by lon/lat range converted to cell-index range. Same
+  // technique as the fast path.
+  const ixMin = Math.floor(args.west / CELL_LON_DEG);
+  const ixMax = Math.floor(args.east / CELL_LON_DEG);
+  const iyMin = Math.floor(args.south / CELL_LAT_DEG);
+  const iyMax = Math.floor(args.north / CELL_LAT_DEG);
+  const res = await pool.query<Cell>(sql, [ixMin, ixMax, iyMin, iyMax]);
+  return res.rows.map((r) => ({
+    ix: Number(r.ix),
+    iy: Number(r.iy),
+    sum: Number(r.sum),
+    count: Number(r.count),
+  }));
+}
+
+async function queryPercentileFiltered(
+  mode: TileMode,
+  percentile: 'top10' | 'bottom10',
+  args: { west: number; east: number; south: number; north: number },
+): Promise<Cell[]> {
+  // Compute the cutoff on (sum/count) — average bumpiness — across
+  // every gate-passing cell, regardless of bbox. Then filter to the
+  // bbox + threshold.
+  const pred =
+    percentile === 'top10'
+      ? '(c.sum / c.count) <= t.lo'
+      : '(c.sum / c.count) >= t.hi';
+  const sql = `
+    WITH cells AS (${cellsCteSource(mode)}),
+         filtered AS (SELECT * FROM cells WHERE count > 0),
+         threshold AS (
+           SELECT
+             percentile_cont(0.1) WITHIN GROUP (ORDER BY sum / count) AS lo,
+             percentile_cont(0.9) WITHIN GROUP (ORDER BY sum / count) AS hi
+           FROM filtered
+         )
+    SELECT c.ix, c.iy, c.sum, c.count
+      FROM filtered c, threshold t
+     WHERE c.ix BETWEEN $1 AND $2
+       AND c.iy BETWEEN $3 AND $4
+       AND ${pred}
+  `;
+  const ixMin = Math.floor(args.west / CELL_LON_DEG);
+  const ixMax = Math.floor(args.east / CELL_LON_DEG);
+  const iyMin = Math.floor(args.south / CELL_LAT_DEG);
+  const iyMax = Math.floor(args.north / CELL_LAT_DEG);
+  const res = await pool.query<Cell>(sql, [ixMin, ixMax, iyMin, iyMax]);
   return res.rows.map((r) => ({
     ix: Number(r.ix),
     iy: Number(r.iy),
@@ -168,15 +229,22 @@ export async function GET(
   }
   if (z < 0 || z > 22) return respondTile(emptyTilePng(), 400);
 
-  const mode: TileMode = parseTileMode(new URL(req.url).searchParams.get('mode'));
+  const url = new URL(req.url);
+  const mode: TileMode = parseTileMode(url.searchParams.get('mode'));
+  const percentile: TilePercentile = parseTilePercentile(
+    url.searchParams.get('percentile'),
+  );
   const bbox = tileQueryBbox(z, x, y);
 
   let cells: Cell[];
   try {
-    cells =
-      mode === 'all'
-        ? await queryAllMode(bbox)
-        : await queryWindowedMode(mode, bbox);
+    if (percentile !== 'all') {
+      cells = await queryPercentileFiltered(mode, percentile, bbox);
+    } else if (mode === 'all') {
+      cells = await queryAllModeFast(bbox);
+    } else {
+      cells = await queryWindowedMode(mode, bbox);
+    }
   } catch (err) {
     console.error('public tile query failed', err);
     return respondTile(emptyTilePng(), 500);

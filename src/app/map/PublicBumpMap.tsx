@@ -4,7 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
-import { TILE_MODES, type TileMode } from '@/lib/tile-mode';
+import {
+  TILE_MODES,
+  TILE_PERCENTILES,
+  type TileMode,
+  type TilePercentile,
+} from '@/lib/tile-mode';
 
 type LayerId = 'bumps' | 'brakes' | 'close-calls';
 
@@ -48,10 +53,29 @@ const MODE_DESCRIPTIONS: Record<TileMode, string> = {
     "Only the ten most recent observations per cell. Best read of what each cell looks like *today*.",
 };
 
-function tileUrlFor(base: string, mode: TileMode): string {
-  // Default mode lives on the base URL without a query string so any
-  // edge cache key we might add stays clean for the most common case.
-  return mode === 'all' ? base : `${base}?mode=${mode}`;
+const PERCENTILE_LABELS: Record<TilePercentile, string> = {
+  all: 'All cells',
+  top10: 'Best 10%',
+  bottom10: 'Worst 10%',
+};
+
+const PERCENTILE_DESCRIPTIONS: Record<TilePercentile, string> = {
+  all: 'Render every cell that passes the privacy gate.',
+  top10:
+    'Only the smoothest (lowest bumpiness) or least-active (lowest incident count) 10% of cells across the whole dataset. The on-the-ground "good news" view.',
+  bottom10:
+    'Only the roughest (highest bumpiness) or most-active (highest incident count) 10% of cells across the whole dataset. The hotspots view.',
+};
+
+function tileUrlFor(
+  base: string,
+  mode: TileMode,
+  percentile: TilePercentile,
+): string {
+  const params: string[] = [];
+  if (mode !== 'all') params.push(`mode=${mode}`);
+  if (percentile !== 'all') params.push(`percentile=${percentile}`);
+  return params.length === 0 ? base : `${base}?${params.join('&')}`;
 }
 
 export function PublicBumpMap({
@@ -69,6 +93,7 @@ export function PublicBumpMap({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [active, setActive] = useState<LayerId>('bumps');
   const [mode, setMode] = useState<TileMode>('all');
+  const [percentile, setPercentile] = useState<TilePercentile>('all');
 
   useEffect(() => {
     const el = containerRef.current;
@@ -89,7 +114,7 @@ export function PublicBumpMap({
       for (const l of LAYERS) {
         map.addSource(l.id, {
           type: 'raster',
-          tiles: [tileUrlFor(l.tilesBase, mode)],
+          tiles: [tileUrlFor(l.tilesBase, mode, percentile)],
           tileSize: 256,
           attribution: l.attribution,
         });
@@ -133,10 +158,10 @@ export function PublicBumpMap({
     else map.once('load', apply);
   }, [active]);
 
-  // Mode toggle. setTiles on each raster source replaces the URL
-  // template and invalidates the source's tile cache, so the visible
-  // layer refetches immediately and the hidden ones refetch lazily
-  // when they're next shown.
+  // Mode + percentile toggle. setTiles on each raster source replaces
+  // the URL template and invalidates the source's tile cache, so the
+  // visible layer refetches immediately and the hidden ones refetch
+  // lazily when they're next shown.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -146,13 +171,13 @@ export function PublicBumpMap({
         if (!src || src.type !== 'raster') continue;
         // setTiles exists on RasterTileSource in maplibre-gl 5.x.
         (src as maplibregl.RasterTileSource).setTiles([
-          tileUrlFor(l.tilesBase, mode),
+          tileUrlFor(l.tilesBase, mode, percentile),
         ]);
       }
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [mode]);
+  }, [mode, percentile]);
 
   return (
     <div>
@@ -208,8 +233,38 @@ export function PublicBumpMap({
             );
           })}
         </div>
+        <div
+          role="tablist"
+          aria-label="Percentile"
+          className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
+        >
+          {TILE_PERCENTILES.map((p) => {
+            const isActive = percentile === p;
+            return (
+              <button
+                key={p}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setPercentile(p)}
+                title={PERCENTILE_DESCRIPTIONS[p]}
+                className={`px-3 py-2 text-sm font-medium transition ${
+                  isActive
+                    ? 'bg-accent-strong text-white'
+                    : 'text-text-muted hover:bg-bg hover:text-text'
+                }`}
+              >
+                {PERCENTILE_LABELS[p]}
+              </button>
+            );
+          })}
+        </div>
       </div>
-      <p className="mb-3 text-xs text-text-muted">{MODE_DESCRIPTIONS[mode]}</p>
+      <p className="mb-3 text-xs text-text-muted">
+        {percentile === 'all'
+          ? MODE_DESCRIPTIONS[mode]
+          : PERCENTILE_DESCRIPTIONS[percentile]}
+      </p>
       <div
         ref={containerRef}
         className="h-[640px] w-full overflow-hidden rounded-lg border border-border"

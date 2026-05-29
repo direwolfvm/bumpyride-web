@@ -7,23 +7,24 @@ import {
   renderIncidentTile,
   tileQueryBbox,
 } from '@/lib/tile-renderer';
-import { parseTileMode, type TileMode } from '@/lib/tile-mode';
+import {
+  parseTileMode,
+  parseTilePercentile,
+  type TileMode,
+  type TilePercentile,
+} from '@/lib/tile-mode';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Public brake-event tile renderer. Mirrors the bumpiness public tile
-// route at /api/tiles/public/[z]/[x]/[y] but reads individual events
-// from brake_events and groups by 20 ft cell.
+// Public brake-event tile renderer. See ./close-calls/.../route.ts
+// and the public bumpiness route at /api/tiles/public/[z]/[x]/[y]
+// for the design rationale shared between all three layers.
 //
-// Accepts ?mode=all|3mo|last10 (default all). The mode controls which
-// events count toward each cell's color:
-//   all     — every brake event ever recorded by an opted-in rider
-//   3mo     — only events in the last three calendar months
-//   last10  — only the ten most recent events per cell
-//
-// Visibility predicate (3 distinct sharing users OR any one with
-// public_map_eager=TRUE) applies in every mode.
+// Accepts ?mode=all|3mo|last10 and ?percentile=all|top10|bottom10.
+// percentile is computed across gate-passing cells globally, so
+// "best 10%" / "worst 10%" rank against the whole dataset rather
+// than the viewport.
 
 const MIN_PUBLIC_CELL_USERS = Math.max(
   1,
@@ -43,65 +44,83 @@ const PNG_HEADERS = {
 const respondTile = (png: Buffer, status = 200) =>
   new Response(new Uint8Array(png), { status, headers: PNG_HEADERS });
 
-function queryFor(mode: TileMode): string {
-  // Shared shape: bbox-filtered events joined to rides + users, grouped
-  // by cell with the 3-rider-or-eager HAVING. Only the inner filter
-  // changes per mode.
-  const cellExpr = `
-    floor(b.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
-    floor(b.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+// CTE producing every gate-passing cell for the given mode. No bbox
+// filter — that's applied in the outer SELECT.
+function cellsCte(mode: TileMode): string {
+  const filter =
+    mode === '3mo' ? "AND b.timestamp > now() - interval '3 months'" : '';
+  const sourceCte = `
+    SELECT
+      floor(b.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
+      floor(b.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+      r.user_id,
+      u.public_map_eager,
+      b.timestamp AS ts
+    FROM brake_events b
+    JOIN rides r ON r.ride_uuid = b.ride_uuid
+    JOIN users u ON u.id = r.user_id
+    WHERE u.share_to_public_map = TRUE
+      AND r.pocket_mode IS DISTINCT FROM TRUE
+      ${filter}
   `;
-  const sourceCte = (extraFilter = '') => `
-    WITH event_cells AS (
-      SELECT
-        ${cellExpr}
-        r.user_id,
-        u.public_map_eager,
-        b.timestamp AS ts
-      FROM brake_events b
-      JOIN rides r ON r.ride_uuid = b.ride_uuid
-      JOIN users u ON u.id = r.user_id
-      WHERE u.share_to_public_map = TRUE
-        AND r.pocket_mode IS DISTINCT FROM TRUE
-        AND b.longitude BETWEEN $1 AND $2
-        AND b.latitude  BETWEEN $3 AND $4
-        ${extraFilter}
-    )
-  `;
-  if (mode === '3mo') {
-    return `
-      ${sourceCte("AND b.timestamp > now() - interval '3 months'")}
-      SELECT ix, iy, count(*)::int AS event_count
-        FROM event_cells
-       GROUP BY ix, iy
-      HAVING count(DISTINCT user_id) >= $5 OR bool_or(public_map_eager)
-    `;
-  }
   if (mode === 'last10') {
-    // Rank events by recency within each cell, keep the top 10, then
-    // group + apply the privacy HAVING on the trimmed set.
     return `
-      ${sourceCte()}
-      , ranked AS (
-        SELECT ix, iy, user_id, public_map_eager,
-               row_number() OVER (PARTITION BY ix, iy ORDER BY ts DESC) AS rn
-          FROM event_cells
-      )
-      SELECT ix, iy, count(*)::int AS event_count
+      WITH event_cells AS (${sourceCte}),
+           ranked AS (
+             SELECT ix, iy, user_id, public_map_eager,
+                    row_number() OVER (PARTITION BY ix, iy ORDER BY ts DESC) AS rn
+               FROM event_cells
+           )
+      SELECT ix, iy, count(*)::int AS count
         FROM ranked
        WHERE rn <= 10
        GROUP BY ix, iy
-      HAVING count(DISTINCT user_id) >= $5 OR bool_or(public_map_eager)
+      HAVING count(DISTINCT user_id) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(public_map_eager)
     `;
   }
-  // mode === 'all'
   return `
-    ${sourceCte()}
-    SELECT ix, iy, count(*)::int AS event_count
+    WITH event_cells AS (${sourceCte})
+    SELECT ix, iy, count(*)::int AS count
       FROM event_cells
      GROUP BY ix, iy
-    HAVING count(DISTINCT user_id) >= $5 OR bool_or(public_map_eager)
+    HAVING count(DISTINCT user_id) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(public_map_eager)
   `;
+}
+
+function finalSql(
+  mode: TileMode,
+  percentile: TilePercentile,
+): { sql: string; usesPercentile: boolean } {
+  if (percentile === 'all') {
+    return {
+      sql: `
+        WITH cells AS (${cellsCte(mode)})
+        SELECT ix, iy, count
+          FROM cells
+         WHERE ix BETWEEN $1 AND $2
+           AND iy BETWEEN $3 AND $4
+      `,
+      usesPercentile: false,
+    };
+  }
+  const pred = percentile === 'top10' ? 'c.count <= t.lo' : 'c.count >= t.hi';
+  return {
+    sql: `
+      WITH cells AS (${cellsCte(mode)}),
+           threshold AS (
+             SELECT
+               percentile_cont(0.1) WITHIN GROUP (ORDER BY count) AS lo,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY count) AS hi
+             FROM cells
+           )
+      SELECT c.ix, c.iy, c.count
+        FROM cells c, threshold t
+       WHERE c.ix BETWEEN $1 AND $2
+         AND c.iy BETWEEN $3 AND $4
+         AND ${pred}
+    `,
+    usesPercentile: true,
+  };
 }
 
 export async function GET(
@@ -117,19 +136,30 @@ export async function GET(
   }
   if (z < 0 || z > 22) return respondTile(emptyTilePng(), 400);
 
-  const mode = parseTileMode(new URL(req.url).searchParams.get('mode'));
+  const url = new URL(req.url);
+  const mode = parseTileMode(url.searchParams.get('mode'));
+  const percentile = parseTilePercentile(url.searchParams.get('percentile'));
   const bbox = tileQueryBbox(z, x, y);
+
+  // The brake-events table is keyed by (longitude, latitude) per the
+  // index in migration 0011, so bbox-bounded paths benefit. The
+  // percentile path scans the full set globally — at our scale, ok.
+  const ixMin = Math.floor(bbox.west / CELL_LON_DEG);
+  const ixMax = Math.floor(bbox.east / CELL_LON_DEG);
+  const iyMin = Math.floor(bbox.south / CELL_LAT_DEG);
+  const iyMax = Math.floor(bbox.north / CELL_LAT_DEG);
 
   let cells: IncidentCell[];
   try {
-    const res = await pool.query<{ ix: number; iy: number; event_count: number }>(
-      queryFor(mode),
-      [bbox.west, bbox.east, bbox.south, bbox.north, MIN_PUBLIC_CELL_USERS],
+    const { sql } = finalSql(mode, percentile);
+    const res = await pool.query<{ ix: number; iy: number; count: number }>(
+      sql,
+      [ixMin, ixMax, iyMin, iyMax],
     );
     cells = res.rows.map((r) => ({
       ix: Number(r.ix),
       iy: Number(r.iy),
-      count: Number(r.event_count),
+      count: Number(r.count),
     }));
   } catch (err) {
     console.error('public brake tile query failed', err);

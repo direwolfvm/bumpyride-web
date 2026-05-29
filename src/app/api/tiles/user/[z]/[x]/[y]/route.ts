@@ -10,6 +10,7 @@ import {
   type Cell,
 } from '@/lib/tile-renderer';
 import { parseTilePercentile, type TilePercentile } from '@/lib/tile-mode';
+import { getOrComputeThreshold, NO_DATA_THRESHOLD } from '@/lib/percentile-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -109,70 +110,72 @@ export async function GET(
       ${modeFilter}
   `;
 
+  // Same fast bbox query for every case. When a percentile is asked
+  // for, fetch the cutoff from the cache (computed once per
+  // (user, mode) per CACHE_TTL_MS — see src/lib/percentile-cache.ts
+  // for the rationale) and apply it in JS to the bbox-bounded rows.
+  // Prior to this, the percentile path computed the cutoff INSIDE
+  // the per-tile query, which scanned the user's full ride_points
+  // each request and pegged the connection pool when /bump-map fired
+  // 16 tiles in parallel.
   let cells: Cell[];
   try {
-    if (percentile === 'all') {
-      const sql = `
-        SELECT ${cellAggregateExpr}
-        ${sourceFrom}
-          AND rp.latitude  BETWEEN $2 AND $3
-          AND rp.longitude BETWEEN $4 AND $5
-        GROUP BY ix, iy
-      `;
-      const res = await pool.query<Cell>(sql, [
-        session.user.id,
-        bbox.south,
-        bbox.north,
-        bbox.west,
-        bbox.east,
-      ]);
-      cells = res.rows.map((r) => ({
-        ix: Number(r.ix),
-        iy: Number(r.iy),
-        sum: Number(r.sum),
-        count: Number(r.count),
-      }));
-    } else {
-      const pred =
-        percentile === 'top10'
-          ? '(c.sum / c.count) <= t.lo'
-          : '(c.sum / c.count) >= t.hi';
-      const ixMin = Math.floor(bbox.west / CELL_LON_DEG);
-      const ixMax = Math.floor(bbox.east / CELL_LON_DEG);
-      const iyMin = Math.floor(bbox.south / CELL_LAT_DEG);
-      const iyMax = Math.floor(bbox.north / CELL_LAT_DEG);
-      const sql = `
-        WITH cells AS (
-          SELECT ${cellAggregateExpr}
-          ${sourceFrom}
-          GROUP BY ix, iy
-        ),
-        filtered AS (SELECT * FROM cells WHERE count > 0),
-        threshold AS (
-          SELECT
-            percentile_cont(0.1) WITHIN GROUP (ORDER BY sum / count) AS lo,
-            percentile_cont(0.9) WITHIN GROUP (ORDER BY sum / count) AS hi
-          FROM filtered
-        )
-        SELECT c.ix, c.iy, c.sum, c.count
-          FROM filtered c, threshold t
-         WHERE c.ix BETWEEN $2 AND $3
-           AND c.iy BETWEEN $4 AND $5
-           AND ${pred}
-      `;
-      const res = await pool.query<Cell>(sql, [
-        session.user.id,
-        ixMin,
-        ixMax,
-        iyMin,
-        iyMax,
-      ]);
-      cells = res.rows.map((r) => ({
-        ix: Number(r.ix),
-        iy: Number(r.iy),
-        sum: Number(r.sum),
-        count: Number(r.count),
-      }));
+    const sql = `
+      SELECT ${cellAggregateExpr}
+      ${sourceFrom}
+        AND rp.latitude  BETWEEN $2 AND $3
+        AND rp.longitude BETWEEN $4 AND $5
+      GROUP BY ix, iy
+    `;
+    const res = await pool.query<Cell>(sql, [
+      session.user.id,
+      bbox.south,
+      bbox.north,
+      bbox.west,
+      bbox.east,
+    ]);
+    cells = res.rows.map((r) => ({
+      ix: Number(r.ix),
+      iy: Number(r.iy),
+      sum: Number(r.sum),
+      count: Number(r.count),
+    }));
+
+    if (percentile !== 'all') {
+      const threshold = await getOrComputeThreshold(
+        `user:${session.user.id}:${mode ?? 'mounted'}`,
+        async (client) => {
+          // Compute the (lo, hi) cutoffs across every cell in the
+          // user's gate-filtered dataset. This is the slow query —
+          // but only runs once per (user, mode) per cache window
+          // because the helper memoises it.
+          const r = await client.query<{ lo: number | null; hi: number | null }>(
+            `WITH cells AS (
+               SELECT ${cellAggregateExpr}
+               ${sourceFrom}
+               GROUP BY ix, iy
+             ),
+             filtered AS (SELECT * FROM cells WHERE count > 0)
+             SELECT
+               percentile_cont(0.1) WITHIN GROUP (ORDER BY sum / count) AS lo,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY sum / count) AS hi
+             FROM filtered`,
+            [session.user.id],
+          );
+          const row = r.rows[0];
+          if (!row || row.lo == null || row.hi == null) {
+            return NO_DATA_THRESHOLD;
+          }
+          return { lo: Number(row.lo), hi: Number(row.hi) };
+        },
+      );
+      cells = cells.filter((c) => {
+        if (c.count <= 0) return false;
+        const avg = c.sum / c.count;
+        return percentile === 'top10'
+          ? avg <= threshold.lo
+          : avg >= threshold.hi;
+      });
     }
   } catch (err) {
     console.error('user tile query failed', err);

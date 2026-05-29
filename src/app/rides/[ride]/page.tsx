@@ -3,7 +3,12 @@ import { and, asc, eq } from 'drizzle-orm';
 import { auth } from '@/auth';
 import { db } from '@/db';
 import { brakeEvents, closeCallEvents, ridePoints, rides } from '@/db/schema';
-import { formatDateTime, formatDistance, formatDuration } from '@/lib/formatters';
+import {
+  formatDateTime,
+  formatDistance,
+  formatDuration,
+  formatSpeed,
+} from '@/lib/formatters';
 import { BrakeEventsSection } from './BrakeEventsSection';
 import { CloseCallsSection } from './CloseCallsSection';
 import { RouteMap } from './RouteMap';
@@ -34,6 +39,7 @@ export default async function RideDetailPage({
         latitude: ridePoints.latitude,
         longitude: ridePoints.longitude,
         bumpiness: ridePoints.bumpiness,
+        speed: ridePoints.speed,
         timestamp: ridePoints.timestamp,
       })
       .from(ridePoints)
@@ -86,6 +92,34 @@ export default async function RideDetailPage({
     lon: c.longitude,
   }));
 
+  // Derived stats for the header grid. Avg speed is wall-clock
+  // (distance / duration) — same as Strava et al. and includes time
+  // stopped at lights. Max speed is the largest single-point speed
+  // sample, which matches the iOS "Max speed" stat on the saved-ride
+  // view exactly. Durations < 1s clamp to avoid divide-by-zero on
+  // pathologically short rides.
+  const durationSec = Math.max(
+    1,
+    (ride.endedAt.getTime() - ride.startedAt.getTime()) / 1000,
+  );
+  const avgSpeedMps = ride.distanceM / durationSec;
+  const maxSpeedMps = points.reduce(
+    (best, p) => (p.speed > best ? p.speed : best),
+    0,
+  );
+
+  // Three-state display for incident counts:
+  //   brakeEventsProcessed=false → "—" (detector hasn't run yet)
+  //   closeCallsSupported=false  → "—" (ride predates the feature)
+  // The dedicated sections below still spell out the full explanation;
+  // the stat cell just shows a count or em-dash.
+  const brakeStat = ride.brakeEventsProcessed
+    ? brakes.length.toLocaleString()
+    : '—';
+  const closeCallStat = ride.closeCallsSupported
+    ? closeCalls.length.toLocaleString()
+    : '—';
+
   return (
     <div className="mx-auto max-w-5xl">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -101,26 +135,33 @@ export default async function RideDetailPage({
 
       <dl className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3 lg:grid-cols-4">
         <Stat label="Started" value={formatDateTime(ride.startedAt)} />
-        <Stat
-          label="Duration"
-          value={formatDuration(
-            (ride.endedAt.getTime() - ride.startedAt.getTime()) / 1000,
-          )}
-        />
+        <Stat label="Duration" value={formatDuration(durationSec)} />
         <Stat label="Distance" value={formatDistance(ride.distanceM)} />
-        <Stat label="Points" value={ride.pointCount.toLocaleString()} />
-        <Stat label="Avg bumpiness" value={`${ride.avgBumpiness.toFixed(2)} g`} />
-        <Stat label="Max bumpiness" value={`${ride.maxBumpiness.toFixed(2)} g`} />
         <Stat
           label="Pocket mode"
           value={
             ride.pocketMode === true
               ? 'on'
               : ride.pocketMode === false
-              ? 'off'
-              : 'unknown'
+                ? 'off'
+                : 'unknown'
           }
         />
+        <Stat label="Avg speed" value={formatSpeed(avgSpeedMps)} />
+        <Stat label="Max speed" value={formatSpeed(maxSpeedMps)} />
+        <Stat label="Avg bumpiness" value={`${ride.avgBumpiness.toFixed(2)} g`} />
+        <Stat label="Max bumpiness" value={`${ride.maxBumpiness.toFixed(2)} g`} />
+        <Stat
+          label="Hard brakes"
+          value={brakeStat}
+          hint={!ride.brakeEventsProcessed ? 'detection pending' : undefined}
+        />
+        <Stat
+          label="Close calls"
+          value={closeCallStat}
+          hint={!ride.closeCallsSupported ? 'predates feature' : undefined}
+        />
+        <Stat label="Points" value={ride.pointCount.toLocaleString()} />
       </dl>
 
       <Section title="Route">
@@ -167,11 +208,20 @@ export default async function RideDetailPage({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
   return (
     <div className="bg-surface px-4 py-3">
       <dt className="text-xs uppercase tracking-wide text-text-muted">{label}</dt>
       <dd className="mt-0.5 text-lg font-medium tabular-nums">{value}</dd>
+      {hint && <div className="mt-0.5 text-xs text-text-dim">{hint}</div>}
     </div>
   );
 }

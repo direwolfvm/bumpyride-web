@@ -13,6 +13,7 @@ import {
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
+import { getOrComputeThreshold, NO_DATA_THRESHOLD } from '@/lib/percentile-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -176,44 +177,29 @@ async function queryWindowedMode(
   }));
 }
 
-async function queryPercentileFiltered(
-  mode: TileMode,
-  percentile: 'top10' | 'bottom10',
-  args: { west: number; east: number; south: number; north: number },
-): Promise<Cell[]> {
-  // Compute the cutoff on (sum/count) — average bumpiness — across
-  // every gate-passing cell, regardless of bbox. Then filter to the
-  // bbox + threshold.
-  const pred =
-    percentile === 'top10'
-      ? '(c.sum / c.count) <= t.lo'
-      : '(c.sum / c.count) >= t.hi';
-  const sql = `
-    WITH cells AS (${cellsCteSource(mode)}),
-         filtered AS (SELECT * FROM cells WHERE count > 0),
-         threshold AS (
-           SELECT
-             percentile_cont(0.1) WITHIN GROUP (ORDER BY sum / count) AS lo,
-             percentile_cont(0.9) WITHIN GROUP (ORDER BY sum / count) AS hi
-           FROM filtered
-         )
-    SELECT c.ix, c.iy, c.sum, c.count
-      FROM filtered c, threshold t
-     WHERE c.ix BETWEEN $1 AND $2
-       AND c.iy BETWEEN $3 AND $4
-       AND ${pred}
-  `;
-  const ixMin = Math.floor(args.west / CELL_LON_DEG);
-  const ixMax = Math.floor(args.east / CELL_LON_DEG);
-  const iyMin = Math.floor(args.south / CELL_LAT_DEG);
-  const iyMax = Math.floor(args.north / CELL_LAT_DEG);
-  const res = await pool.query<Cell>(sql, [ixMin, ixMax, iyMin, iyMax]);
-  return res.rows.map((r) => ({
-    ix: Number(r.ix),
-    iy: Number(r.iy),
-    sum: Number(r.sum),
-    count: Number(r.count),
-  }));
+async function fetchPercentileThreshold(mode: TileMode) {
+  // Memoised in src/lib/percentile-cache.ts. Cold-path query scans
+  // the gate-passing set for the layer+mode and computes the (0.1,
+  // 0.9) cutoffs on avg bumpiness. Subsequent requests within the
+  // TTL skip the DB entirely.
+  return getOrComputeThreshold(
+    `public:bumpiness:${mode}`,
+    async (client) => {
+      const r = await client.query<{ lo: number | null; hi: number | null }>(
+        `WITH cells AS (${cellsCteSource(mode)}),
+              filtered AS (SELECT * FROM cells WHERE count > 0)
+         SELECT
+           percentile_cont(0.1) WITHIN GROUP (ORDER BY sum / count) AS lo,
+           percentile_cont(0.9) WITHIN GROUP (ORDER BY sum / count) AS hi
+         FROM filtered`,
+      );
+      const row = r.rows[0];
+      if (!row || row.lo == null || row.hi == null) {
+        return NO_DATA_THRESHOLD;
+      }
+      return { lo: Number(row.lo), hi: Number(row.hi) };
+    },
+  );
 }
 
 export async function GET(
@@ -238,12 +224,22 @@ export async function GET(
 
   let cells: Cell[];
   try {
+    // Same bbox query for every percentile choice — pull the cells
+    // for this tile via the existing fast (or windowed) path, then
+    // apply the cached percentile cutoff in JS when needed.
+    cells = mode === 'all'
+      ? await queryAllModeFast(bbox)
+      : await queryWindowedMode(mode, bbox);
+
     if (percentile !== 'all') {
-      cells = await queryPercentileFiltered(mode, percentile, bbox);
-    } else if (mode === 'all') {
-      cells = await queryAllModeFast(bbox);
-    } else {
-      cells = await queryWindowedMode(mode, bbox);
+      const threshold = await fetchPercentileThreshold(mode);
+      cells = cells.filter((c) => {
+        if (c.count <= 0) return false;
+        const avg = c.sum / c.count;
+        return percentile === 'top10'
+          ? avg <= threshold.lo
+          : avg >= threshold.hi;
+      });
     }
   } catch (err) {
     console.error('public tile query failed', err);

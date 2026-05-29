@@ -11,8 +11,8 @@ import {
   parseTileMode,
   parseTilePercentile,
   type TileMode,
-  type TilePercentile,
 } from '@/lib/tile-mode';
+import { getOrComputeThreshold, NO_DATA_THRESHOLD } from '@/lib/percentile-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,9 +22,11 @@ export const dynamic = 'force-dynamic';
 // for the design rationale shared between all three layers.
 //
 // Accepts ?mode=all|3mo|last10 and ?percentile=all|top10|bottom10.
-// percentile is computed across gate-passing cells globally, so
-// "best 10%" / "worst 10%" rank against the whole dataset rather
-// than the viewport.
+// percentile is computed across gate-passing cells globally and
+// memoised in src/lib/percentile-cache.ts — the per-tile query just
+// pulls the gate-passing cells in this tile's bbox and filters
+// against the cached (lo, hi) cutoffs in JS. Same pattern as the
+// personal user tile route's hotfix from PR #36.
 
 const MIN_PUBLIC_CELL_USERS = Math.max(
   1,
@@ -45,8 +47,10 @@ const respondTile = (png: Buffer, status = 200) =>
   new Response(new Uint8Array(png), { status, headers: PNG_HEADERS });
 
 // CTE producing every gate-passing cell for the given mode. No bbox
-// filter — that's applied in the outer SELECT.
-function cellsCte(mode: TileMode): string {
+// filter — both the per-tile query and the threshold compute apply
+// the bbox in their outer SELECTs (or skip it, in the case of the
+// global threshold).
+function cellsCteSource(mode: TileMode): string {
   const filter =
     mode === '3mo' ? "AND b.timestamp > now() - interval '3 months'" : '';
   const sourceCte = `
@@ -87,42 +91,6 @@ function cellsCte(mode: TileMode): string {
   `;
 }
 
-function finalSql(
-  mode: TileMode,
-  percentile: TilePercentile,
-): { sql: string; usesPercentile: boolean } {
-  if (percentile === 'all') {
-    return {
-      sql: `
-        WITH cells AS (${cellsCte(mode)})
-        SELECT ix, iy, count
-          FROM cells
-         WHERE ix BETWEEN $1 AND $2
-           AND iy BETWEEN $3 AND $4
-      `,
-      usesPercentile: false,
-    };
-  }
-  const pred = percentile === 'top10' ? 'c.count <= t.lo' : 'c.count >= t.hi';
-  return {
-    sql: `
-      WITH cells AS (${cellsCte(mode)}),
-           threshold AS (
-             SELECT
-               percentile_cont(0.1) WITHIN GROUP (ORDER BY count) AS lo,
-               percentile_cont(0.9) WITHIN GROUP (ORDER BY count) AS hi
-             FROM cells
-           )
-      SELECT c.ix, c.iy, c.count
-        FROM cells c, threshold t
-       WHERE c.ix BETWEEN $1 AND $2
-         AND c.iy BETWEEN $3 AND $4
-         AND ${pred}
-    `,
-    usesPercentile: true,
-  };
-}
-
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ z: string; x: string; y: string }> },
@@ -141,9 +109,6 @@ export async function GET(
   const percentile = parseTilePercentile(url.searchParams.get('percentile'));
   const bbox = tileQueryBbox(z, x, y);
 
-  // The brake-events table is keyed by (longitude, latitude) per the
-  // index in migration 0011, so bbox-bounded paths benefit. The
-  // percentile path scans the full set globally — at our scale, ok.
   const ixMin = Math.floor(bbox.west / CELL_LON_DEG);
   const ixMax = Math.floor(bbox.east / CELL_LON_DEG);
   const iyMin = Math.floor(bbox.south / CELL_LAT_DEG);
@@ -151,9 +116,19 @@ export async function GET(
 
   let cells: IncidentCell[];
   try {
-    const { sql } = finalSql(mode, percentile);
+    // Same bbox query for every percentile, threshold applied in JS
+    // when needed. The cells CTE itself doesn't depend on bbox or
+    // percentile, so cold-path scans the gate-passing set once per
+    // tile — same cost as the prior `?percentile=all` path.
+    const bboxSql = `
+      WITH cells AS (${cellsCteSource(mode)})
+      SELECT ix, iy, count
+        FROM cells
+       WHERE ix BETWEEN $1 AND $2
+         AND iy BETWEEN $3 AND $4
+    `;
     const res = await pool.query<{ ix: number; iy: number; count: number }>(
-      sql,
+      bboxSql,
       [ixMin, ixMax, iyMin, iyMax],
     );
     cells = res.rows.map((r) => ({
@@ -161,6 +136,29 @@ export async function GET(
       iy: Number(r.iy),
       count: Number(r.count),
     }));
+
+    if (percentile !== 'all') {
+      const threshold = await getOrComputeThreshold(
+        `public:brakes:${mode}`,
+        async (client) => {
+          const r = await client.query<{ lo: number | null; hi: number | null }>(
+            `WITH cells AS (${cellsCteSource(mode)})
+             SELECT
+               percentile_cont(0.1) WITHIN GROUP (ORDER BY count) AS lo,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY count) AS hi
+             FROM cells`,
+          );
+          const row = r.rows[0];
+          if (!row || row.lo == null || row.hi == null) {
+            return NO_DATA_THRESHOLD;
+          }
+          return { lo: Number(row.lo), hi: Number(row.hi) };
+        },
+      );
+      cells = cells.filter((c) =>
+        percentile === 'top10' ? c.count <= threshold.lo : c.count >= threshold.hi,
+      );
+    }
   } catch (err) {
     console.error('public brake tile query failed', err);
     return respondTile(emptyTilePng(), 500);

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
+import { type TilePercentile } from '@/lib/tile-mode';
 
 // Three-option filter, mirroring the iOS Bump Map's segmented control.
 //   all      every ride
@@ -27,10 +28,12 @@ function readStoredMode(): Mode {
 }
 
 const TILE_BASE = '/api/tiles/user/{z}/{x}/{y}';
-function tileUrl(m: Mode): string {
+function tileUrl(m: Mode, p: TilePercentile): string {
   // The server defaults to mounted too, but pass the param explicitly
   // either way so the URL is unambiguous in network logs.
-  return `${TILE_BASE}?mode=${m}`;
+  const params = [`mode=${m}`];
+  if (p !== 'all') params.push(`percentile=${p}`);
+  return `${TILE_BASE}?${params.join('&')}`;
 }
 
 const CAPTION: Record<Mode, string> = {
@@ -56,6 +59,11 @@ export function PrivateBumpMap({
   // The default in SSR / first paint matches DEFAULT_MODE; we promote
   // to the user's stored preference on mount.
   const [mode, setMode] = useState<Mode>(DEFAULT_MODE);
+  // Best/worst-10% percentile filter. Defaults to All cells — the
+  // historical behaviour. Not persisted because it's a transient
+  // "what does my map look like at the extremes" question, not a
+  // long-term preference.
+  const [percentile, setPercentile] = useState<TilePercentile>('all');
 
   useEffect(() => {
     setMode(readStoredMode());
@@ -66,6 +74,8 @@ export function PrivateBumpMap({
   // sees the latest value even if the user toggled before load completes.
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const percentileRef = useRef(percentile);
+  percentileRef.current = percentile;
 
   useEffect(() => {
     const el = containerRef.current;
@@ -85,7 +95,7 @@ export function PrivateBumpMap({
     map.on('load', () => {
       map.addSource('bump', {
         type: 'raster',
-        tiles: [tileUrl(modeRef.current)],
+        tiles: [tileUrl(modeRef.current, percentileRef.current)],
         tileSize: 256,
       });
       map.addLayer({
@@ -103,13 +113,16 @@ export function PrivateBumpMap({
     };
   }, [minLat, maxLat, minLon, maxLon]);
 
-  // When the mode toggle flips, just swap the source's tile URLs — MapLibre
-  // re-fetches visible tiles in place rather than reflowing the whole map.
+  // When the mode/percentile toggle flips, just swap the source's
+  // tile URLs — MapLibre re-fetches visible tiles in place rather
+  // than reflowing the whole map.
   useEffect(() => {
     const src = mapRef.current?.getSource('bump');
     if (!src) return;
-    (src as maplibregl.RasterTileSource).setTiles([tileUrl(mode)]);
-  }, [mode]);
+    (src as maplibregl.RasterTileSource).setTiles([
+      tileUrl(mode, percentile),
+    ]);
+  }, [mode, percentile]);
 
   function selectMode(next: Mode) {
     setMode(next);
@@ -118,19 +131,39 @@ export function PrivateBumpMap({
     } catch {}
   }
 
+  const percentileCaption =
+    percentile === 'top10'
+      ? 'Highlighting your smoothest 10% of cells.'
+      : percentile === 'bottom10'
+        ? 'Highlighting your roughest 10% of cells.'
+        : null;
+
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-sm text-text-muted">{CAPTION[mode]}</div>
-        <Segmented
-          value={mode}
-          onChange={selectMode}
-          options={[
-            { value: 'all', label: 'All' },
-            { value: 'mounted', label: 'Mounted' },
-            { value: 'pocket', label: 'Pocket' },
-          ]}
-        />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-text-muted">
+          {percentileCaption ?? CAPTION[mode]}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Segmented
+            value={mode}
+            onChange={selectMode}
+            options={[
+              { value: 'all', label: 'All' },
+              { value: 'mounted', label: 'Mounted' },
+              { value: 'pocket', label: 'Pocket' },
+            ]}
+          />
+          <Segmented
+            value={percentile}
+            onChange={setPercentile}
+            options={[
+              { value: 'all', label: 'All cells' },
+              { value: 'top10', label: 'Best 10%' },
+              { value: 'bottom10', label: 'Worst 10%' },
+            ]}
+          />
+        </div>
       </div>
       <div
         ref={containerRef}

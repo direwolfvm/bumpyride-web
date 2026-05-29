@@ -9,6 +9,7 @@ import {
   tileQueryBbox,
   type Cell,
 } from '@/lib/tile-renderer';
+import { parseTilePercentile, type TilePercentile } from '@/lib/tile-mode';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -67,56 +68,112 @@ export async function GET(
     modeFilter = 'AND r.pocket_mode IS DISTINCT FROM TRUE';
   }
 
+  // Best/worst-10% percentile filter, separate from the mounted/
+  // pocket mode above. `all` keeps the fast bbox-only path; `top10`
+  // (best, lowest avg bumpiness) and `bottom10` (worst, highest avg)
+  // compute the cutoff across all of this user's cells matching the
+  // mode filter — so "best 10%" means against the user's own
+  // dataset, not the viewport.
+  const percentile: TilePercentile = parseTilePercentile(
+    req.nextUrl.searchParams.get('percentile'),
+  );
+
   const bbox = tileQueryBbox(z, x, y);
 
-  // Aggregate cells from this user's ride_points inside the bbox.
-  // CELL_*_DEG are JS-side constants; embed as literals so the query plan
-  // doesn't need to be re-prepared per call.
+  // Aggregate cells from this user's ride_points. The per-cell
+  // bumpiness applies the same per-rider pocket calibration the
+  // iOS app uses on-device. Two SQL shapes:
   //
-  // Calibration applies regardless of the filter: pocket-mode samples
-  // are scaled by the user's pocket_gain when their calibration is in
-  // effect (pocket_confidence >= CONFIDENCE_FLOOR), matching the rule
-  // the iOS app applies on-device. Mounted samples always use raw
-  // bumpiness. When the filter excludes pocket rides, the CASE branch
-  // is unreachable anyway.
-  const sql = `
-    SELECT
-      floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
-      floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
-      SUM(
-        CASE
-          WHEN r.pocket_mode = TRUE
-            AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
-            THEN rp.bumpiness * u.pocket_gain
-          ELSE rp.bumpiness
-        END
-      ) AS sum,
-      COUNT(*)::int AS count
+  //   percentile === 'all': aggregate within the bbox only (fast).
+  //   percentile != 'all':  aggregate over every cell (no bbox),
+  //                         compute percentile_cont threshold,
+  //                         then filter by bbox + threshold.
+  const cellAggregateExpr = `
+    floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
+    floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+    SUM(
+      CASE
+        WHEN r.pocket_mode = TRUE
+          AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
+          THEN rp.bumpiness * u.pocket_gain
+        ELSE rp.bumpiness
+      END
+    )::float8 AS sum,
+    COUNT(*)::int AS count
+  `;
+  const sourceFrom = `
     FROM ride_points rp
     JOIN rides r ON r.ride_uuid = rp.ride_uuid
     JOIN users u ON u.id = r.user_id
     WHERE r.user_id = $1
-      AND rp.latitude  BETWEEN $2 AND $3
-      AND rp.longitude BETWEEN $4 AND $5
       ${modeFilter}
-    GROUP BY ix, iy
   `;
 
   let cells: Cell[];
   try {
-    const res = await pool.query<Cell>(sql, [
-      session.user.id,
-      bbox.south,
-      bbox.north,
-      bbox.west,
-      bbox.east,
-    ]);
-    cells = res.rows.map((r) => ({
-      ix: Number(r.ix),
-      iy: Number(r.iy),
-      sum: Number(r.sum),
-      count: Number(r.count),
-    }));
+    if (percentile === 'all') {
+      const sql = `
+        SELECT ${cellAggregateExpr}
+        ${sourceFrom}
+          AND rp.latitude  BETWEEN $2 AND $3
+          AND rp.longitude BETWEEN $4 AND $5
+        GROUP BY ix, iy
+      `;
+      const res = await pool.query<Cell>(sql, [
+        session.user.id,
+        bbox.south,
+        bbox.north,
+        bbox.west,
+        bbox.east,
+      ]);
+      cells = res.rows.map((r) => ({
+        ix: Number(r.ix),
+        iy: Number(r.iy),
+        sum: Number(r.sum),
+        count: Number(r.count),
+      }));
+    } else {
+      const pred =
+        percentile === 'top10'
+          ? '(c.sum / c.count) <= t.lo'
+          : '(c.sum / c.count) >= t.hi';
+      const ixMin = Math.floor(bbox.west / CELL_LON_DEG);
+      const ixMax = Math.floor(bbox.east / CELL_LON_DEG);
+      const iyMin = Math.floor(bbox.south / CELL_LAT_DEG);
+      const iyMax = Math.floor(bbox.north / CELL_LAT_DEG);
+      const sql = `
+        WITH cells AS (
+          SELECT ${cellAggregateExpr}
+          ${sourceFrom}
+          GROUP BY ix, iy
+        ),
+        filtered AS (SELECT * FROM cells WHERE count > 0),
+        threshold AS (
+          SELECT
+            percentile_cont(0.1) WITHIN GROUP (ORDER BY sum / count) AS lo,
+            percentile_cont(0.9) WITHIN GROUP (ORDER BY sum / count) AS hi
+          FROM filtered
+        )
+        SELECT c.ix, c.iy, c.sum, c.count
+          FROM filtered c, threshold t
+         WHERE c.ix BETWEEN $2 AND $3
+           AND c.iy BETWEEN $4 AND $5
+           AND ${pred}
+      `;
+      const res = await pool.query<Cell>(sql, [
+        session.user.id,
+        ixMin,
+        ixMax,
+        iyMin,
+        iyMax,
+      ]);
+      cells = res.rows.map((r) => ({
+        ix: Number(r.ix),
+        iy: Number(r.iy),
+        sum: Number(r.sum),
+        count: Number(r.count),
+      }));
+    }
   } catch (err) {
     console.error('user tile query failed', err);
     return NOT_FOUND_TILE(500);

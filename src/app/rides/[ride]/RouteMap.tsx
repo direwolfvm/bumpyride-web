@@ -5,6 +5,20 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
 
+// When two consecutive samples are more than MAX_GAP_SECONDS apart in
+// time, suppress the connecting polyline segment. iOS records every
+// ~10 ft of motion at typical riding speed, so anything over a couple
+// of seconds is GPS dropout, an iOS pause, an app backgrounding, or
+// the user picking up after a break. Drawing a straight line across
+// those gaps gives misleading "as-the-crow-flies" routes that don't
+// reflect what was actually ridden.
+//
+// The threshold is generous (10s) so a momentary stoplight + chat
+// doesn't get split into two visible segments — at zero speed the
+// app may downgrade its sample cadence, so brief stops occasionally
+// produce gaps of several seconds even though the rider didn't move.
+const MAX_GAP_SECONDS = 10;
+
 // Mirrors the iOS bumpiness colour stops so the route on the web looks like
 // the route on the device. Kept in sync with src/lib/tile-renderer.ts.
 const LINE_COLOR: maplibregl.ExpressionSpecification = [
@@ -61,6 +75,11 @@ export function RouteMap({
       if (p.lon > maxLon) maxLon = p.lon;
       if (i === 0) continue;
       const prev = samples[i - 1];
+      // Suppress the connecting segment across recording gaps — see
+      // MAX_GAP_SECONDS above. The previous and current samples still
+      // contribute their lat/lon to the bbox so a long pause doesn't
+      // shrink the map's auto-fit; only the visible polyline is broken.
+      if (p.tSec - prev.tSec > MAX_GAP_SECONDS) continue;
       features.push({
         type: 'Feature',
         geometry: {

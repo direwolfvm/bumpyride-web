@@ -57,6 +57,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <Link href="/bump-map" className="text-accent hover:underline">
                     My bump map
                   </Link>
+                  <Link href="/score" className="text-accent hover:underline">
+                    Score
+                  </Link>
                   <Link
                     href="/settings/account"
                     className="text-accent hover:underline"

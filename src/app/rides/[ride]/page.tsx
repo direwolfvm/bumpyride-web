@@ -1,8 +1,10 @@
 import { notFound, redirect } from 'next/navigation';
 import { and, asc, eq } from 'drizzle-orm';
+import Link from 'next/link';
+import { sum } from 'drizzle-orm';
 import { auth } from '@/auth';
 import { db } from '@/db';
-import { brakeEvents, closeCallEvents, ridePoints, rides } from '@/db/schema';
+import { brakeEvents, closeCallEvents, ridePoints, rides, scoreEvents } from '@/db/schema';
 import {
   formatDateTime,
   formatDistance,
@@ -33,7 +35,7 @@ export default async function RideDetailPage({
   });
   if (!ride) notFound();
 
-  const [points, brakeRows, closeCallRows] = await Promise.all([
+  const [points, brakeRows, closeCallRows, scoreAgg] = await Promise.all([
     db
       .select({
         latitude: ridePoints.latitude,
@@ -67,7 +69,12 @@ export default async function RideDetailPage({
       .from(closeCallEvents)
       .where(eq(closeCallEvents.rideUuid, rideUuid))
       .orderBy(asc(closeCallEvents.timestamp)),
+    db
+      .select({ points: sum(scoreEvents.points) })
+      .from(scoreEvents)
+      .where(eq(scoreEvents.rideUuid, rideUuid)),
   ]);
+  const ridePointsEarned = Number(scoreAgg[0]?.points ?? 0);
 
   const startMs = ride.startedAt.getTime();
   const samples = points.map((p) => ({
@@ -161,8 +168,20 @@ export default async function RideDetailPage({
           value={closeCallStat}
           hint={!ride.closeCallsSupported ? 'predates feature' : undefined}
         />
-        <Stat label="Points" value={ride.pointCount.toLocaleString()} />
+        <Stat
+          label="Points earned"
+          value={ridePointsEarned > 0 ? `+${ridePointsEarned.toLocaleString()}` : '—'}
+          hint={ridePointsEarned === 0 ? 'sharing off' : 'cell discovery'}
+        />
+        <Stat label="Samples" value={ride.pointCount.toLocaleString()} />
       </dl>
+      <p className="mt-2 text-xs text-text-muted">
+        See your total + level on{' '}
+        <Link href="/score" className="text-accent hover:underline">
+          /score
+        </Link>
+        .
+      </p>
 
       <Section title="Route">
         {samples.length > 0 ? (

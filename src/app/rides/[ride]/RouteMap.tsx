@@ -32,6 +32,31 @@ const LINE_COLOR: maplibregl.ExpressionSpecification = [
   2.0, '#aa00dd',
 ];
 
+// Bumpiness color buckets used to group adjacent samples into runs.
+// Samples whose bumpiness sits in the same bucket join one LineString;
+// crossing a boundary emits a new feature. Boundaries are midpoints
+// between the iOS color stops above (0.25, 0.75, 1.25, 1.75) — so the
+// per-run AVERAGE bumpiness ends up close to the nominal stop value
+// and the gradient looks continuous to the eye even though the actual
+// geometry is bucketed.
+//
+// Why bucket at all: the previous implementation emitted one Feature
+// per ADJACENT sample pair. A ride with 5,000 samples produced 5,000
+// LineString features, each spanning a single ~10 ft hop. At default
+// zoom for a long ride that's many sub-pixel segments per feature,
+// which maplibre's renderer drops outright — the route appeared
+// invisible until the user zoomed in ~6 clicks and the segments grew
+// past 1 px. Grouping into ~50 longer Features per ride lets every
+// feature have meaningful pixel extent at every zoom level.
+const BUCKET_BOUNDARIES = [0.25, 0.75, 1.25, 1.75] as const;
+
+function bumpinessBucket(b: number): number {
+  for (let i = 0; i < BUCKET_BOUNDARIES.length; i++) {
+    if (b < BUCKET_BOUNDARIES[i]) return i;
+  }
+  return BUCKET_BOUNDARIES.length;
+}
+
 export type Sample = {
   lat: number;
   lon: number;
@@ -67,31 +92,55 @@ export function RouteMap({
 
     const features = [] as GeoJSON.Feature<GeoJSON.LineString>[];
     let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+
+    // Run-builder state. Each run is a contiguous stretch of samples
+    // whose bumpiness color bucket matches and whose recording timeline
+    // has no gap. flushRun emits the accumulated LineString feature
+    // (skipping degenerate single-point runs).
+    let runCoords: [number, number][] = [];
+    let runSum = 0;
+    let runBucket = -1;
+    const flushRun = () => {
+      if (runCoords.length >= 2) {
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: runCoords },
+          properties: { bumpiness: runSum / runCoords.length },
+        });
+      }
+      runCoords = [];
+      runSum = 0;
+      runBucket = -1;
+    };
+
     for (let i = 0; i < samples.length; i++) {
       const p = samples[i];
       if (p.lat < minLat) minLat = p.lat;
       if (p.lat > maxLat) maxLat = p.lat;
       if (p.lon < minLon) minLon = p.lon;
       if (p.lon > maxLon) maxLon = p.lon;
-      if (i === 0) continue;
-      const prev = samples[i - 1];
-      // Suppress the connecting segment across recording gaps — see
-      // MAX_GAP_SECONDS above. The previous and current samples still
-      // contribute their lat/lon to the bbox so a long pause doesn't
-      // shrink the map's auto-fit; only the visible polyline is broken.
-      if (p.tSec - prev.tSec > MAX_GAP_SECONDS) continue;
-      features.push({
-        type: 'Feature',
-        geometry: {
-          type: 'LineString',
-          coordinates: [
-            [prev.lon, prev.lat],
-            [p.lon, p.lat],
-          ],
-        },
-        properties: { bumpiness: (prev.bumpiness + p.bumpiness) / 2 },
-      });
+
+      const bucket = bumpinessBucket(p.bumpiness);
+      const prev = i > 0 ? samples[i - 1] : null;
+      const gap = prev !== null && p.tSec - prev.tSec > MAX_GAP_SECONDS;
+
+      if (gap) {
+        flushRun();
+      } else if (runBucket !== -1 && bucket !== runBucket) {
+        // Bumpiness crossed a bucket boundary. Close the current run
+        // at this point and open a new run starting from the same
+        // point — so adjacent runs visually connect end-to-end and
+        // we don't draw a sub-pixel gap on bucket transitions.
+        runCoords.push([p.lon, p.lat]);
+        runSum += p.bumpiness;
+        flushRun();
+      }
+
+      if (runBucket === -1) runBucket = bucket;
+      runCoords.push([p.lon, p.lat]);
+      runSum += p.bumpiness;
     }
+    flushRun();
 
     const brakeFeatures: GeoJSON.Feature<GeoJSON.Point>[] = brakeMarkers.map((b) => ({
       type: 'Feature',
@@ -125,7 +174,20 @@ export function RouteMap({
         type: 'line',
         source: 'route',
         layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': LINE_COLOR, 'line-width': 4 },
+        paint: {
+          'line-color': LINE_COLOR,
+          // Slight zoom interpolation: thicker at low zoom so the
+          // route stays visible when a long ride auto-fits to z=11-13,
+          // narrower at high zoom where the detail matters more.
+          'line-width': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            10, 4,
+            14, 4,
+            18, 6,
+          ] as maplibregl.ExpressionSpecification,
+        },
       });
 
       if (brakeFeatures.length > 0) {

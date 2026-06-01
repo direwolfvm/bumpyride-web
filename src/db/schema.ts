@@ -269,6 +269,52 @@ export const bumpCells = pgTable(
   }),
 );
 
+// Per (ride, cell) cell-discovery scoring rows. One row per cell a
+// ride contributed bumpiness to (gated by sharing-on + mounted-or-
+// legacy). Each row holds the awarded tier (10 = first ever to the
+// cell, 5 = first by this user but not globally first, 1 = repeat
+// visit). Re-uploading a ride wipes its rows and recomputes against
+// the rest of the world; sharing-off wipes all of the user's rows.
+export const scoreEvents = pgTable(
+  'score_events',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    rideUuid: uuid('ride_uuid')
+      .notNull()
+      .references(() => rides.rideUuid, { onDelete: 'cascade' }),
+    ix: integer('ix').notNull(),
+    iy: integer('iy').notNull(),
+    points: integer('points').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    rideCellUq: uniqueIndex('score_events_ride_uuid_ix_iy_key').on(
+      t.rideUuid,
+      t.ix,
+      t.iy,
+    ),
+    cellIdx: index('score_events_cell_idx').on(t.ix, t.iy),
+    userCellIdx: index('score_events_user_cell_idx').on(t.userId, t.ix, t.iy),
+  }),
+);
+
+// Cached per-user totals so the score page + iOS GET /api/me/score
+// don't aggregate score_events on every read. Updated incrementally
+// inside the ride sync + sharing toggle transactions.
+export const userScores = pgTable('user_scores', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  totalPoints: bigint('total_points', { mode: 'number' }).notNull().default(0),
+  firstEverCount: integer('first_ever_count').notNull().default(0),
+  firstUserCount: integer('first_user_count').notNull().default(0),
+  repeatCount: integer('repeat_count').notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Distinct (cell, user) pairs for cells the user is actively
 // contributing to (sharing on, mounted-or-legacy ride). Drives the
 // "show this cell once 3+ users contribute" predicate in the public

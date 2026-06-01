@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 import { pool } from '@/db';
 import { rideSchema, type RidePayload } from '@/lib/ride-schema';
 import { CELL_LAT_DEG, CELL_LON_DEG, gridIndex } from '@/lib/bump-grid';
+import { recomputeRideScore } from '@/lib/scoring';
 import { lookupTokenUser, parseBearer } from '@/lib/tokens';
 
 export const dynamic = 'force-dynamic';
@@ -439,6 +440,30 @@ export async function POST(req: NextRequest) {
           [ix, iy, userId],
         );
       }
+    }
+
+    // Cell-discovery scoring. Idempotent on re-upload — wipes this
+    // ride's score_events first, then assigns tiers against the
+    // current state. Eligibility matches the public-aggregate rule.
+    {
+      const cellsForScoring: { ix: number; iy: number }[] = [];
+      if (willBeInPublic) {
+        const seen = new Set<string>();
+        for (const p of payload.points) {
+          const { ix, iy } = gridIndex(p.latitude, p.longitude);
+          const key = `${ix}:${iy}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          cellsForScoring.push({ ix, iy });
+        }
+      }
+      await recomputeRideScore(
+        client,
+        payload.id,
+        userId,
+        cellsForScoring,
+        willBeInPublic,
+      );
     }
 
     await client.query('COMMIT');

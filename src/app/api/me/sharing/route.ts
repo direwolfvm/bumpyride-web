@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ZodError, z } from 'zod';
 import { pool } from '@/db';
 import { CELL_LAT_DEG, CELL_LON_DEG } from '@/lib/bump-grid';
+import { backfillUserScores, wipeUserScores } from '@/lib/scoring';
 import { getRequestUserId } from '@/lib/request-auth';
 
 export const runtime = 'nodejs';
@@ -157,6 +158,10 @@ export async function PATCH(req: NextRequest) {
            ON CONFLICT DO NOTHING`,
           [userId],
         );
+        // Cell-discovery scoring: backfill from every eligible ride
+        // chronologically so the tier sequence (10 → 5 → 1) lines up
+        // with how the user actually accumulated cells.
+        await backfillUserScores(client, userId);
       } else {
         // Opting out: subtract the user's eligible contributions and
         // drop all of their contributor rows. Same CTE — whatever we
@@ -176,6 +181,11 @@ export async function PATCH(req: NextRequest) {
           'DELETE FROM bump_cell_contributors WHERE user_id = $1',
           [userId],
         );
+        // Cell-discovery scoring: opting out resets the score to zero
+        // and removes the user from the "first ever" calculation for
+        // every cell they had. Other users won't get retroactively
+        // promoted (deliberate simplification — see scoring.ts).
+        await wipeUserScores(client, userId);
       }
     }
 

@@ -17,33 +17,32 @@ export type Level = {
   threshold: number; // total_points required to unlock
 };
 
-// Two prior re-scales — the original 0..70K ladder was reachable in
-// a few rides, the 1000x bump to 0..70M was too generous at the top.
-// This pass keeps the same name list and curve shape but compresses
-// the top to 50M, rounded to friendly numbers throughout. Early
-// levels still fall quickly so a brand-new rider sees frequent
-// progress; the top stays out of reach until many months of mapping.
+// Third re-scale. The 50M top from PR #42 was still optimistic given
+// realistic single-rider cell counts; compressing to 20M keeps the
+// top "many months of mapping" without becoming unreachable. Same
+// curve shape, same name list, all numbers rounded to friendly
+// values.
 export const LEVELS: ReadonlyArray<Level> = [
   { index: 1,  name: 'Just Rolling',           threshold: 0 },
-  { index: 2,  name: 'Saddle Stretcher',       threshold: 20_000 },
-  { index: 3,  name: 'Sidewalk Surveyor',      threshold: 50_000 },
-  { index: 4,  name: 'Bike Lane Native',       threshold: 100_000 },
-  { index: 5,  name: 'Crosstown Cruiser',      threshold: 200_000 },
-  { index: 6,  name: 'Greenway Geographer',    threshold: 325_000 },
-  { index: 7,  name: 'Pothole Patroller',      threshold: 500_000 },
-  { index: 8,  name: 'Bump Bookkeeper',        threshold: 750_000 },
-  { index: 9,  name: 'Tarmac Topographer',     threshold: 1_000_000 },
-  { index: 10, name: 'Asphalt Archivist',      threshold: 1_500_000 },
-  { index: 11, name: 'Drain Detective',        threshold: 2_000_000 },
-  { index: 12, name: 'Manhole Mapper',         threshold: 3_000_000 },
-  { index: 13, name: 'Cobble Cartographer',    threshold: 4_000_000 },
-  { index: 14, name: 'Speed Bump Sage',        threshold: 5_500_000 },
-  { index: 15, name: 'Velo Cartographer',      threshold: 7_500_000 },
-  { index: 16, name: 'Roadie Royalty',         threshold: 11_000_000 },
-  { index: 17, name: 'Saddle Savant',          threshold: 16_000_000 },
-  { index: 18, name: 'King of the Curbstone',  threshold: 23_000_000 },
-  { index: 19, name: 'Yellow Jersey',          threshold: 34_000_000 },
-  { index: 20, name: 'BumpyRide Legend',       threshold: 50_000_000 },
+  { index: 2,  name: 'Saddle Stretcher',       threshold: 8_000 },
+  { index: 3,  name: 'Sidewalk Surveyor',      threshold: 20_000 },
+  { index: 4,  name: 'Bike Lane Native',       threshold: 40_000 },
+  { index: 5,  name: 'Crosstown Cruiser',      threshold: 80_000 },
+  { index: 6,  name: 'Greenway Geographer',    threshold: 130_000 },
+  { index: 7,  name: 'Pothole Patroller',      threshold: 200_000 },
+  { index: 8,  name: 'Bump Bookkeeper',        threshold: 300_000 },
+  { index: 9,  name: 'Tarmac Topographer',     threshold: 400_000 },
+  { index: 10, name: 'Asphalt Archivist',      threshold: 600_000 },
+  { index: 11, name: 'Drain Detective',        threshold: 800_000 },
+  { index: 12, name: 'Manhole Mapper',         threshold: 1_200_000 },
+  { index: 13, name: 'Cobble Cartographer',    threshold: 1_600_000 },
+  { index: 14, name: 'Speed Bump Sage',        threshold: 2_200_000 },
+  { index: 15, name: 'Velo Cartographer',      threshold: 3_000_000 },
+  { index: 16, name: 'Roadie Royalty',         threshold: 4_500_000 },
+  { index: 17, name: 'Saddle Savant',          threshold: 6_500_000 },
+  { index: 18, name: 'King of the Curbstone',  threshold: 9_000_000 },
+  { index: 19, name: 'Yellow Jersey',          threshold: 13_500_000 },
+  { index: 20, name: 'BumpyRide Legend',       threshold: 20_000_000 },
 ];
 
 /**

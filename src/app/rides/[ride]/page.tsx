@@ -1,7 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import Link from 'next/link';
-import { sum } from 'drizzle-orm';
 import { auth } from '@/auth';
 import { db } from '@/db';
 import { brakeEvents, closeCallEvents, ridePoints, rides, scoreEvents } from '@/db/schema';
@@ -70,11 +69,21 @@ export default async function RideDetailPage({
       .where(eq(closeCallEvents.rideUuid, rideUuid))
       .orderBy(asc(closeCallEvents.timestamp)),
     db
-      .select({ points: sum(scoreEvents.points) })
+      .select({
+        total: sql<number>`COALESCE(SUM(${scoreEvents.points}), 0)::int`,
+        firstEver: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 10)::int`,
+        firstForYou: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 5)::int`,
+        repeat: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 1)::int`,
+      })
       .from(scoreEvents)
       .where(eq(scoreEvents.rideUuid, rideUuid)),
   ]);
-  const ridePointsEarned = Number(scoreAgg[0]?.points ?? 0);
+  const ridePointsEarned = Number(scoreAgg[0]?.total ?? 0);
+  const rideScoreBreakdown = {
+    firstEver: Number(scoreAgg[0]?.firstEver ?? 0),
+    firstForYou: Number(scoreAgg[0]?.firstForYou ?? 0),
+    repeat: Number(scoreAgg[0]?.repeat ?? 0),
+  };
 
   const startMs = ride.startedAt.getTime();
   const samples = points.map((p) => ({
@@ -172,6 +181,11 @@ export default async function RideDetailPage({
           label="Points earned"
           value={ridePointsEarned > 0 ? `+${ridePointsEarned.toLocaleString()}` : '—'}
           hint={ridePointsEarned === 0 ? 'sharing off' : 'cell discovery'}
+          details={
+            ridePointsEarned > 0 ? (
+              <ScoreBreakdown breakdown={rideScoreBreakdown} />
+            ) : undefined
+          }
         />
         <Stat label="Samples" value={ride.pointCount.toLocaleString()} />
       </dl>
@@ -231,17 +245,93 @@ function Stat({
   label,
   value,
   hint,
+  details,
 }: {
   label: string;
   value: string;
   hint?: string;
+  details?: React.ReactNode;
 }) {
   return (
     <div className="bg-surface px-4 py-3">
       <dt className="text-xs uppercase tracking-wide text-text-muted">{label}</dt>
       <dd className="mt-0.5 text-lg font-medium tabular-nums">{value}</dd>
       {hint && <div className="mt-0.5 text-xs text-text-dim">{hint}</div>}
+      {details}
     </div>
+  );
+}
+
+// Per-ride score breakdown surfaced via a native <details> disclosure
+// under the "Points earned" Stat. No client JS — the browser owns
+// the toggle. Closed by default to keep the stat grid compact;
+// clicking the ⓘ summary expands to show how the ride's points split
+// across the three tiers.
+function ScoreBreakdown({
+  breakdown,
+}: {
+  breakdown: { firstEver: number; firstForYou: number; repeat: number };
+}) {
+  const items = [
+    {
+      label: 'New cells',
+      hint: 'first rider ever to reach these',
+      count: breakdown.firstEver,
+      per: 10,
+    },
+    {
+      label: 'New to me',
+      hint: 'someone else had them, you joined',
+      count: breakdown.firstForYou,
+      per: 5,
+    },
+    {
+      label: 'Old cells',
+      hint: 'cells you had mapped before',
+      count: breakdown.repeat,
+      per: 1,
+    },
+  ];
+  return (
+    <details className="group mt-2 text-xs">
+      <summary
+        className="inline-flex cursor-pointer items-center gap-1 text-text-muted hover:text-text"
+        aria-label="Show score breakdown"
+      >
+        <span
+          aria-hidden
+          className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-text-muted text-[10px] leading-none"
+        >
+          i
+        </span>
+        <span className="group-open:hidden">breakdown</span>
+        <span className="hidden group-open:inline">hide</span>
+      </summary>
+      <ul className="mt-2 space-y-1.5">
+        {items.map((it) => (
+          <li
+            key={it.label}
+            className="flex items-baseline justify-between gap-3 tabular-nums"
+          >
+            <div className="flex flex-col">
+              <span className="text-text">{it.label}</span>
+              <span className="text-[10px] text-text-dim">{it.hint}</span>
+            </div>
+            <div className="text-right">
+              <div>
+                <span className="font-medium text-text">
+                  {it.count.toLocaleString()}
+                </span>{' '}
+                <span className="text-text-muted">×{it.per}</span>
+              </div>
+              <div className="text-text-muted">
+                = {(it.count * it.per).toLocaleString()} pts
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

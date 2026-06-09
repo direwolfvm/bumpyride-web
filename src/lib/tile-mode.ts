@@ -43,3 +43,26 @@ export function parseTilePercentile(
     ? (raw as TilePercentile)
     : 'all';
 }
+
+// Per-cell bumpiness aggregation. Only the bumpiness layer uses this
+// — brakes and close calls are inherently per-event counts.
+//
+//   avg     — mean of bumpiness samples in the cell. Default. Stable,
+//             but masks the worst hits in a cell that's mostly smooth.
+//   median  — middle sample. Resilient to a couple of huge spikes; a
+//             cell with one giant pothole on an otherwise calm street
+//             still reads "calm".
+//   max     — single worst sample. Surfaces those rare big hits even
+//             if the cell is mostly smooth.
+
+export const TILE_BUMP_AGGS = ['avg', 'median', 'max'] as const;
+export type TileBumpAgg = (typeof TILE_BUMP_AGGS)[number];
+
+export function parseTileBumpAgg(
+  raw: string | null | undefined,
+): TileBumpAgg {
+  if (!raw) return 'avg';
+  return (TILE_BUMP_AGGS as readonly string[]).includes(raw)
+    ? (raw as TileBumpAgg)
+    : 'avg';
+}

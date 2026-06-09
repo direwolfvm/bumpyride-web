@@ -5,8 +5,10 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
 import {
+  TILE_BUMP_AGGS,
   TILE_MODES,
   TILE_PERCENTILES,
+  type TileBumpAgg,
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
@@ -67,14 +69,34 @@ const PERCENTILE_DESCRIPTIONS: Record<TilePercentile, string> = {
     'Only the roughest (highest bumpiness) or most-active (highest incident count) 10% of cells across the whole dataset. The hotspots view.',
 };
 
+const BUMP_AGG_LABELS: Record<TileBumpAgg, string> = {
+  avg: 'Average',
+  median: 'Median',
+  max: 'Max',
+};
+
+const BUMP_AGG_DESCRIPTIONS: Record<TileBumpAgg, string> = {
+  avg: 'Mean bumpiness across all samples in each cell. Default. Stable signal that downweights one-off spikes.',
+  median:
+    'Middle sample per cell. Resilient to a few huge hits — one giant pothole on an otherwise smooth street stays "smooth".',
+  max: 'Worst single sample per cell. Surfaces those rare large hits even where the cell is mostly calm.',
+};
+
 function tileUrlFor(
   base: string,
   mode: TileMode,
   percentile: TilePercentile,
+  agg: TileBumpAgg,
+  isBumps: boolean,
 ): string {
   const params: string[] = [];
   if (mode !== 'all') params.push(`mode=${mode}`);
   if (percentile !== 'all') params.push(`percentile=${percentile}`);
+  // agg only applies to the bumps layer; don't bake it into brake /
+  // close-call URLs (those routes don't read it, but skipping the
+  // param keeps the URL clean and the tile cache stable for incidents
+  // when the user flips agg).
+  if (isBumps && agg !== 'avg') params.push(`agg=${agg}`);
   return params.length === 0 ? base : `${base}?${params.join('&')}`;
 }
 
@@ -94,6 +116,7 @@ export function PublicBumpMap({
   const [active, setActive] = useState<LayerId>('bumps');
   const [mode, setMode] = useState<TileMode>('all');
   const [percentile, setPercentile] = useState<TilePercentile>('all');
+  const [bumpAgg, setBumpAgg] = useState<TileBumpAgg>('avg');
 
   useEffect(() => {
     const el = containerRef.current;
@@ -114,7 +137,7 @@ export function PublicBumpMap({
       for (const l of LAYERS) {
         map.addSource(l.id, {
           type: 'raster',
-          tiles: [tileUrlFor(l.tilesBase, mode, percentile)],
+          tiles: [tileUrlFor(l.tilesBase, mode, percentile, bumpAgg, l.id === 'bumps')],
           tileSize: 256,
           attribution: l.attribution,
         });
@@ -158,10 +181,10 @@ export function PublicBumpMap({
     else map.once('load', apply);
   }, [active]);
 
-  // Mode + percentile toggle. setTiles on each raster source replaces
-  // the URL template and invalidates the source's tile cache, so the
-  // visible layer refetches immediately and the hidden ones refetch
-  // lazily when they're next shown.
+  // Mode + percentile + agg toggle. setTiles on each raster source
+  // replaces the URL template and invalidates the source's tile cache,
+  // so the visible layer refetches immediately and the hidden ones
+  // refetch lazily when they're next shown.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -171,13 +194,13 @@ export function PublicBumpMap({
         if (!src || src.type !== 'raster') continue;
         // setTiles exists on RasterTileSource in maplibre-gl 5.x.
         (src as maplibregl.RasterTileSource).setTiles([
-          tileUrlFor(l.tilesBase, mode, percentile),
+          tileUrlFor(l.tilesBase, mode, percentile, bumpAgg, l.id === 'bumps'),
         ]);
       }
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [mode, percentile]);
+  }, [mode, percentile, bumpAgg]);
 
   return (
     <div>
@@ -259,11 +282,41 @@ export function PublicBumpMap({
             );
           })}
         </div>
+        {active === 'bumps' && (
+          <div
+            role="tablist"
+            aria-label="Aggregation"
+            className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
+          >
+            {TILE_BUMP_AGGS.map((a) => {
+              const isActive = bumpAgg === a;
+              return (
+                <button
+                  key={a}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setBumpAgg(a)}
+                  title={BUMP_AGG_DESCRIPTIONS[a]}
+                  className={`px-3 py-2 text-sm font-medium transition ${
+                    isActive
+                      ? 'bg-accent-strong text-white'
+                      : 'text-text-muted hover:bg-bg hover:text-text'
+                  }`}
+                >
+                  {BUMP_AGG_LABELS[a]}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
       <p className="mb-3 text-xs text-text-muted">
-        {percentile === 'all'
-          ? MODE_DESCRIPTIONS[mode]
-          : PERCENTILE_DESCRIPTIONS[percentile]}
+        {active === 'bumps' && bumpAgg !== 'avg'
+          ? BUMP_AGG_DESCRIPTIONS[bumpAgg]
+          : percentile === 'all'
+            ? MODE_DESCRIPTIONS[mode]
+            : PERCENTILE_DESCRIPTIONS[percentile]}
       </p>
       <div
         ref={containerRef}

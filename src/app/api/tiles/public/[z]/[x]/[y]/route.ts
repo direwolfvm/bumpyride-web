@@ -8,8 +8,10 @@ import {
   type Cell,
 } from '@/lib/tile-renderer';
 import {
+  parseTileBumpAgg,
   parseTileMode,
   parseTilePercentile,
+  type TileBumpAgg,
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
@@ -20,14 +22,19 @@ export const dynamic = 'force-dynamic';
 
 // Public aggregated bump-map tiles. Anonymous access.
 //
-// Accepts two query parameters:
+// Accepts three query parameters:
 //   ?mode=all|3mo|last10        time window (see lib/tile-mode.ts)
 //   ?percentile=all|top10|bottom10
 //       all      — render every gate-passing cell.
-//       top10    — only cells whose avg bumpiness is <= the 10th
+//       top10    — only cells whose per-cell value is <= the 10th
 //                  percentile across the whole dataset (= smoothest).
-//       bottom10 — only cells whose avg bumpiness is >= the 90th
+//       bottom10 — only cells whose per-cell value is >= the 90th
 //                  percentile (= roughest).
+//   ?agg=avg|median|max         per-cell aggregation; default avg.
+//                               avg uses the maintained bump_cells
+//                               table for the fast path. median/max
+//                               require re-aggregating ride_points
+//                               and skip the fast path.
 //
 // Privacy gate (3 distinct sharing users OR any one with
 // public_map_eager) applies in every mode; percentile is computed
@@ -89,12 +96,29 @@ async function queryAllModeFast(args: {
   }));
 }
 
-// Builds the gate-passing per-cell CTE for a given mode. Used by both
-// the windowed-mode path and the percentile path so they apply the
-// same privacy + mode filter.
-function cellsCteSource(mode: TileMode): string {
-  if (mode === 'all') {
-    // Use the maintained aggregate; gate via EXISTS.
+// Per-cell aggregation expression: SQL fragment that, when given a
+// column named `bumpiness`, produces `sum` and `count` such that
+// sum/count is the displayed value. For median/max we set count=1 and
+// stuff the metric into sum so the renderer can stay one-shape.
+function aggExpr(agg: TileBumpAgg, col: string): string {
+  if (agg === 'median') {
+    return `percentile_cont(0.5) WITHIN GROUP (ORDER BY ${col})::float8 AS sum,
+            1::bigint AS count`;
+  }
+  if (agg === 'max') {
+    return `MAX(${col})::float8 AS sum,
+            1::bigint AS count`;
+  }
+  return `SUM(${col})::float8 AS sum,
+          COUNT(*)::bigint AS count`;
+}
+
+// Builds the gate-passing per-cell CTE for a given (mode, agg). Used
+// by both the windowed-mode path and the percentile path so they
+// apply the same privacy + mode filter.
+function cellsCteSource(mode: TileMode, agg: TileBumpAgg): string {
+  if (mode === 'all' && agg === 'avg') {
+    // Avg + all-mode: maintained aggregate, gate via EXISTS. Fast path.
     return `
       SELECT bc.ix, bc.iy, bc.sum::float8 AS sum, bc.count::bigint AS count
         FROM bump_cells bc
@@ -107,6 +131,8 @@ function cellsCteSource(mode: TileMode): string {
        )
     `;
   }
+  // Everything else re-aggregates from ride_points. The agg expression
+  // decides whether we sum, median, or max the per-cell bumpiness.
   const filter = mode === '3mo' ? "AND rp.timestamp > now() - interval '3 months'" : '';
   const inner = `
     SELECT
@@ -131,32 +157,31 @@ function cellsCteSource(mode: TileMode): string {
                FROM sc
            )
       SELECT ix, iy,
-             sum(bumpiness)::float8 AS sum,
-             count(*)::bigint       AS count
+             ${aggExpr(agg, 'bumpiness')}
         FROM ranked
        WHERE rn <= 10
        GROUP BY ix, iy
       HAVING count(DISTINCT user_id) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(public_map_eager)
     `;
   }
-  // mode === '3mo'
+  // mode === '3mo' OR (mode === 'all' AND agg !== 'avg')
   return `
     WITH sc AS (${inner})
     SELECT ix, iy,
-           sum(bumpiness)::float8 AS sum,
-           count(*)::bigint       AS count
+           ${aggExpr(agg, 'bumpiness')}
       FROM sc
      GROUP BY ix, iy
     HAVING count(DISTINCT user_id) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(public_map_eager)
   `;
 }
 
-async function queryWindowedMode(
-  mode: '3mo' | 'last10',
+async function queryReaggregated(
+  mode: TileMode,
+  agg: TileBumpAgg,
   args: { west: number; east: number; south: number; north: number },
 ): Promise<Cell[]> {
   const sql = `
-    WITH cells AS (${cellsCteSource(mode)})
+    WITH cells AS (${cellsCteSource(mode, agg)})
     SELECT ix, iy, sum, count
       FROM cells
      WHERE ix BETWEEN $1 AND $2
@@ -177,16 +202,16 @@ async function queryWindowedMode(
   }));
 }
 
-async function fetchPercentileThreshold(mode: TileMode) {
+async function fetchPercentileThreshold(mode: TileMode, agg: TileBumpAgg) {
   // Memoised in src/lib/percentile-cache.ts. Cold-path query scans
-  // the gate-passing set for the layer+mode and computes the (0.1,
-  // 0.9) cutoffs on avg bumpiness. Subsequent requests within the
-  // TTL skip the DB entirely.
+  // the gate-passing set for the layer+mode+agg and computes the
+  // (0.1, 0.9) cutoffs on the per-cell value. Subsequent requests
+  // within the TTL skip the DB entirely.
   return getOrComputeThreshold(
-    `public:bumpiness:${mode}`,
+    `public:bumpiness:${mode}:${agg}`,
     async (client) => {
       const r = await client.query<{ lo: number | null; hi: number | null }>(
-        `WITH cells AS (${cellsCteSource(mode)}),
+        `WITH cells AS (${cellsCteSource(mode, agg)}),
               filtered AS (SELECT * FROM cells WHERE count > 0)
          SELECT
            percentile_cont(0.1) WITHIN GROUP (ORDER BY sum / count) AS lo,
@@ -220,19 +245,19 @@ export async function GET(
   const percentile: TilePercentile = parseTilePercentile(
     url.searchParams.get('percentile'),
   );
+  const agg: TileBumpAgg = parseTileBumpAgg(url.searchParams.get('agg'));
   const bbox = tileQueryBbox(z, x, y);
 
   let cells: Cell[];
   try {
-    // Same bbox query for every percentile choice — pull the cells
-    // for this tile via the existing fast (or windowed) path, then
-    // apply the cached percentile cutoff in JS when needed.
-    cells = mode === 'all'
+    // Fast path: avg + all-mode, served from bump_cells. Every other
+    // (mode, agg) re-aggregates ride_points behind the gate.
+    cells = mode === 'all' && agg === 'avg'
       ? await queryAllModeFast(bbox)
-      : await queryWindowedMode(mode, bbox);
+      : await queryReaggregated(mode, agg, bbox);
 
     if (percentile !== 'all') {
-      const threshold = await fetchPercentileThreshold(mode);
+      const threshold = await fetchPercentileThreshold(mode, agg);
       cells = cells.filter((c) => {
         if (c.count <= 0) return false;
         const avg = c.sum / c.count;

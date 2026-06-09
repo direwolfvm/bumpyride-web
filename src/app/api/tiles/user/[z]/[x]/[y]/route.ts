@@ -10,8 +10,10 @@ import {
   type Cell,
 } from '@/lib/tile-renderer';
 import {
+  parseTileBumpAgg,
   parseTileMode,
   parseTilePercentile,
+  type TileBumpAgg,
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
@@ -36,6 +38,11 @@ export const dynamic = 'force-dynamic';
 //                               tile-helpers.ts for legacy handling.)
 //   ?mode=all|3mo|last10        time window; default all.
 //   ?percentile=all|top10|bottom10  percentile filter; default all.
+//   ?agg=avg|median|max         per-cell aggregation; default avg.
+//
+// Aggregation is encoded into the (sum, count) tuple so the renderer
+// can stay one-shape: sum / count = the displayed metric. For median
+// and max we set count=1 and stuff the chosen metric into sum.
 //
 // Calibration: pocket-mode samples get scaled by the rider's
 // pocket_gain when pocket_confidence >= CONFIDENCE_FLOOR. Matches
@@ -49,37 +56,77 @@ const PNG_HEADERS = {
 const NOT_FOUND_TILE = (status = 200) =>
   new Response(new Uint8Array(emptyTilePng()), { status, headers: PNG_HEADERS });
 
-// Per-cell bumpiness aggregation expression, with pocket calibration
-// applied per-sample. Used as the SELECT body for both the bbox query
-// and the threshold-compute path.
-const CELL_AGGREGATE_EXPR = `
-  floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
-  floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
-  SUM(
-    CASE
-      WHEN r.pocket_mode = TRUE
-        AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
-        THEN rp.bumpiness * u.pocket_gain
-      ELSE rp.bumpiness
-    END
-  )::float8 AS sum,
-  COUNT(*)::int AS count
-`;
-
-// For the last-10-samples-per-cell mode we need the per-sample
-// calibrated bumpiness value (no SUM yet), so we expose that as a
-// separate fragment that the windowed CTE projects.
-const PER_SAMPLE_EXPR = `
-  floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
-  floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+// Per-sample calibrated bumpiness expression — used in every SQL path
+// here. Pocket calibration is applied per-sample, matching iOS.
+const CALIBRATED_BUMP = `
   CASE
     WHEN r.pocket_mode = TRUE
       AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
       THEN rp.bumpiness * u.pocket_gain
     ELSE rp.bumpiness
-  END AS bump,
+  END
+`;
+
+// Per-cell aggregation projected as (sum, count) such that sum/count
+// is the displayed value. For avg we project the natural SUM + COUNT
+// so the renderer can keep its existing avg = sum/count math. For
+// median and max we set count=1 and stuff the chosen metric into sum.
+function cellAggregateExpr(agg: TileBumpAgg): string {
+  const base = `
+    floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
+    floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+  `;
+  if (agg === 'median') {
+    return `${base}
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY ${CALIBRATED_BUMP})::float8 AS sum,
+      1::int AS count
+    `;
+  }
+  if (agg === 'max') {
+    return `${base}
+      MAX(${CALIBRATED_BUMP})::float8 AS sum,
+      1::int AS count
+    `;
+  }
+  return `${base}
+    SUM(${CALIBRATED_BUMP})::float8 AS sum,
+    COUNT(*)::int AS count
+  `;
+}
+
+// last10 mode does its aggregation inside the renderer-shape SELECT
+// (after the row_number filter), so we hand the per-sample bumpiness
+// out raw and aggregate downstream the same way as the bbox path.
+const PER_SAMPLE_EXPR = `
+  floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
+  floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+  ${CALIBRATED_BUMP} AS bump,
   rp.timestamp
 `;
+
+// Aggregate the ranked-sample subquery the same way as cellAggregateExpr,
+// but operating on the already-projected `bump` column from the CTE.
+function rankedAggregateExpr(agg: TileBumpAgg): string {
+  if (agg === 'median') {
+    return `
+      ix, iy,
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY bump)::float8 AS sum,
+      1::int AS count
+    `;
+  }
+  if (agg === 'max') {
+    return `
+      ix, iy,
+      MAX(bump)::float8 AS sum,
+      1::int AS count
+    `;
+  }
+  return `
+    ix, iy,
+    SUM(bump)::float8 AS sum,
+    COUNT(*)::int AS count
+  `;
+}
 
 function sourceFrom(rides: RidesFilter, timeFilter: string): string {
   return `
@@ -92,8 +139,8 @@ function sourceFrom(rides: RidesFilter, timeFilter: string): string {
   `;
 }
 
-// Build the bbox-bounded per-tile query for the given (rides, mode).
-function bboxQuery(rides: RidesFilter, mode: TileMode): string {
+// Build the bbox-bounded per-tile query for the given (rides, mode, agg).
+function bboxQuery(rides: RidesFilter, mode: TileMode, agg: TileBumpAgg): string {
   const timeFilter =
     mode === '3mo' ? "AND rp.timestamp > now() - interval '3 months'" : '';
   const bboxFilter = `
@@ -111,22 +158,24 @@ function bboxQuery(rides: RidesFilter, mode: TileMode): string {
         SELECT *, row_number() OVER (PARTITION BY ix, iy ORDER BY timestamp DESC) AS rn
           FROM samples
       )
-      SELECT ix, iy, SUM(bump)::float8 AS sum, COUNT(*)::int AS count
+      SELECT ${rankedAggregateExpr(agg)}
         FROM ranked
        WHERE rn <= 10
        GROUP BY ix, iy
     `;
   }
   return `
-    SELECT ${CELL_AGGREGATE_EXPR}
+    SELECT ${cellAggregateExpr(agg)}
     ${sourceFrom(rides, timeFilter)}
     ${bboxFilter}
     GROUP BY ix, iy
   `;
 }
 
-// Threshold-compute path: same shape, no bbox.
-function thresholdQuery(rides: RidesFilter, mode: TileMode): string {
+// Threshold-compute path: same shape, no bbox. The percentile cutoff
+// is computed over sum/count, which (per cellAggregateExpr) equals
+// the displayed metric for any agg.
+function thresholdQuery(rides: RidesFilter, mode: TileMode, agg: TileBumpAgg): string {
   const timeFilter =
     mode === '3mo' ? "AND rp.timestamp > now() - interval '3 months'" : '';
   if (mode === 'last10') {
@@ -140,7 +189,7 @@ function thresholdQuery(rides: RidesFilter, mode: TileMode): string {
           FROM samples
       ),
       cells AS (
-        SELECT ix, iy, SUM(bump)::float8 AS sum, COUNT(*)::int AS count
+        SELECT ${rankedAggregateExpr(agg)}
           FROM ranked
          WHERE rn <= 10
          GROUP BY ix, iy
@@ -154,7 +203,7 @@ function thresholdQuery(rides: RidesFilter, mode: TileMode): string {
   }
   return `
     WITH cells AS (
-      SELECT ${CELL_AGGREGATE_EXPR}
+      SELECT ${cellAggregateExpr(agg)}
       ${sourceFrom(rides, timeFilter)}
       GROUP BY ix, iy
     ),
@@ -193,12 +242,13 @@ export async function GET(
     ? 'all'
     : parseTileMode(sp.get('mode'));
   const percentile: TilePercentile = parseTilePercentile(sp.get('percentile'));
+  const agg: TileBumpAgg = parseTileBumpAgg(sp.get('agg'));
 
   const bbox = tileQueryBbox(z, x, y);
 
   let cells: Cell[];
   try {
-    const res = await pool.query<Cell>(bboxQuery(rides, mode), [
+    const res = await pool.query<Cell>(bboxQuery(rides, mode, agg), [
       session.user.id,
       bbox.south,
       bbox.north,
@@ -214,10 +264,10 @@ export async function GET(
 
     if (percentile !== 'all') {
       const threshold = await getOrComputeThreshold(
-        `user:bumpiness:${session.user.id}:${rides}:${mode}`,
+        `user:bumpiness:${session.user.id}:${rides}:${mode}:${agg}`,
         async (client) => {
           const r = await client.query<{ lo: number | null; hi: number | null }>(
-            thresholdQuery(rides, mode),
+            thresholdQuery(rides, mode, agg),
             [session.user.id],
           );
           const row = r.rows[0];

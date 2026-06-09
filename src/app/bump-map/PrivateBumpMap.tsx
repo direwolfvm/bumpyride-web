@@ -5,8 +5,10 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
 import {
+  TILE_BUMP_AGGS,
   TILE_MODES,
   TILE_PERCENTILES,
+  type TileBumpAgg,
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
@@ -87,6 +89,18 @@ const PERCENTILE_HELP: Record<TilePercentile, string> = {
     'Only the roughest 10% of bumpiness cells, or the highest-count 10% of brake / close-call cells.',
 };
 
+const BUMP_AGG_LABELS: Record<TileBumpAgg, string> = {
+  avg: 'Average',
+  median: 'Median',
+  max: 'Max',
+};
+const BUMP_AGG_HELP: Record<TileBumpAgg, string> = {
+  avg: 'Mean bumpiness across the samples in each cell. Default.',
+  median:
+    'Middle sample per cell — resilient to one-off spikes. A cell with a single huge pothole on otherwise smooth pavement still reads "smooth".',
+  max: 'Worst single sample per cell. Surfaces those rare big hits even where the cell is mostly calm.',
+};
+
 // localStorage keys. Migrated from the old `bumpmap.mode` key
 // (which used to hold mounted|pocket|all — now the rides axis).
 const STORE_RIDES = 'bumpmap.rides';
@@ -105,10 +119,15 @@ function tileUrlFor(
   rides: RidesFilter,
   mode: TileMode,
   percentile: TilePercentile,
+  agg: TileBumpAgg,
+  isBumps: boolean,
 ): string {
   const params: string[] = [`rides=${rides}`];
   if (mode !== 'all') params.push(`mode=${mode}`);
   if (percentile !== 'all') params.push(`percentile=${percentile}`);
+  // agg only applies to the bumps layer; skip it on brake / close-call
+  // URLs so their tile cache stays stable when the user flips agg.
+  if (isBumps && agg !== 'avg') params.push(`agg=${agg}`);
   return `${base}?${params.join('&')}`;
 }
 
@@ -129,6 +148,7 @@ export function PrivateBumpMap({
   const [rides, setRides] = useState<RidesFilter>('mounted');
   const [mode, setMode] = useState<TileMode>('all');
   const [percentile, setPercentile] = useState<TilePercentile>('all');
+  const [bumpAgg, setBumpAgg] = useState<TileBumpAgg>('avg');
 
   // SSR-safe rides hydration on mount.
   useEffect(() => {
@@ -165,7 +185,7 @@ export function PrivateBumpMap({
       for (const l of LAYERS) {
         map.addSource(l.id, {
           type: 'raster',
-          tiles: [tileUrlFor(l.tilesBase, rides, mode, percentile)],
+          tiles: [tileUrlFor(l.tilesBase, rides, mode, percentile, bumpAgg, l.id === 'bumps')],
           tileSize: 256,
           attribution: l.attribution,
         });
@@ -205,7 +225,7 @@ export function PrivateBumpMap({
     else map.once('load', apply);
   }, [active]);
 
-  // Rides / mode / percentile changes → retile every layer.
+  // Rides / mode / percentile / agg changes → retile every layer.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -214,23 +234,25 @@ export function PrivateBumpMap({
         const src = map.getSource(l.id);
         if (!src || src.type !== 'raster') continue;
         (src as maplibregl.RasterTileSource).setTiles([
-          tileUrlFor(l.tilesBase, rides, mode, percentile),
+          tileUrlFor(l.tilesBase, rides, mode, percentile, bumpAgg, l.id === 'bumps'),
         ]);
       }
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [rides, mode, percentile]);
+  }, [rides, mode, percentile, bumpAgg]);
 
   // Live caption beneath the tab strips. Whichever axis the user
   // most recently flipped wins — falls back to the rides filter
   // when nothing exotic is selected.
   const caption =
-    percentile !== 'all'
-      ? PERCENTILE_HELP[percentile]
-      : mode !== 'all'
-        ? MODE_HELP[mode]
-        : RIDES_HELP[rides];
+    active === 'bumps' && bumpAgg !== 'avg'
+      ? BUMP_AGG_HELP[bumpAgg]
+      : percentile !== 'all'
+        ? PERCENTILE_HELP[percentile]
+        : mode !== 'all'
+          ? MODE_HELP[mode]
+          : RIDES_HELP[rides];
 
   return (
     <div>
@@ -271,6 +293,18 @@ export function PrivateBumpMap({
           current={percentile}
           onChange={(v) => setPercentile(v as TilePercentile)}
         />
+        {active === 'bumps' && (
+          <TabStrip
+            ariaLabel="Aggregation"
+            values={TILE_BUMP_AGGS.map((a) => ({
+              id: a,
+              label: BUMP_AGG_LABELS[a],
+              help: BUMP_AGG_HELP[a],
+            }))}
+            current={bumpAgg}
+            onChange={(v) => setBumpAgg(v as TileBumpAgg)}
+          />
+        )}
       </div>
       <p className="mb-3 text-xs text-text-muted">{caption}</p>
       <div

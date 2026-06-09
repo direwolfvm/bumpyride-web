@@ -8,6 +8,21 @@ import { CELL_LAT_DEG, CELL_LON_DEG } from '@/lib/bump-grid';
 // caller's transaction — the sync + toggle handlers already wrap
 // everything in BEGIN/COMMIT, and scoring needs to be atomic with
 // the rest of those changes.
+//
+// Tier ladder (also documented in migrations/0014, /0016 and on the
+// /score page):
+//
+//   10  first user EVER to record bump data in this cell
+//    5  first ride by THIS user to a cell other users already had
+//    3  repeat visit, but the user's previous ride to this cell was
+//       more than STALE_REFRESH_DAYS ago — rewards keeping coverage
+//       fresh
+//    1  any other repeat visit
+
+// Threshold past which a repeat visit gets the refresh bonus. Keep
+// this in sync with the same constant referenced in the migration
+// (0016) and the /score page copy.
+export const STALE_REFRESH_DAYS = 10;
 
 /**
  * Wipe the user's existing score_events and recompute the user_scores
@@ -72,6 +87,18 @@ export async function recomputeRideScore(
                 AND se.iy = nc.iy
                 AND se.user_id = $1::uuid
            ) THEN 5
+           -- 3 pts: user has been in this cell before, but their last
+           -- visit was more than STALE_REFRESH_DAYS ago. "Last visit"
+           -- is the newest score_event.created_at for this (user,
+           -- cell) pair; the new event we're about to insert defaults
+           -- to now(), so we measure the gap against now().
+           WHEN NOT EXISTS (
+             SELECT 1 FROM score_events se
+              WHERE se.ix = nc.ix
+                AND se.iy = nc.iy
+                AND se.user_id = $1::uuid
+                AND se.created_at > now() - interval '${STALE_REFRESH_DAYS} days'
+           ) THEN 3
            ELSE 1
          END
        FROM unnest($3::int[], $4::int[]) AS nc(ix, iy)`,
@@ -126,7 +153,7 @@ export async function backfillUserScores(
          -- their priority. So if any OTHER user already has a row
          -- for this cell when the backfill runs, this user can't
          -- claim 10 points for it — they slot in at the 5-point
-         -- tier (or 1 for repeats).
+         -- tier (or 1/3 for repeats).
          EXISTS (
            SELECT 1 FROM score_events se
             WHERE se.ix = rc.ix AND se.iy = rc.iy
@@ -135,7 +162,14 @@ export async function backfillUserScores(
          rank() OVER (
            PARTITION BY ix, iy
            ORDER BY created_at, ride_uuid
-         ) AS user_rank
+         ) AS user_rank,
+         -- Gap to this user's previous ride to this cell. NULL for
+         -- the very first ride per (user, cell). Used to decide
+         -- between the 3-pt refresh tier and the 1-pt plain repeat.
+         created_at - lag(created_at) OVER (
+           PARTITION BY ix, iy
+           ORDER BY created_at, ride_uuid
+         ) AS prev_gap
        FROM ride_cells rc
      )
      SELECT
@@ -144,8 +178,9 @@ export async function backfillUserScores(
        ix,
        iy,
        CASE
-         WHEN user_rank > 1       THEN 1
-         WHEN other_user_has_cell THEN 5
+         WHEN user_rank > 1 AND prev_gap > interval '${STALE_REFRESH_DAYS} days' THEN 3
+         WHEN user_rank > 1                                                     THEN 1
+         WHEN other_user_has_cell                                               THEN 5
          ELSE 10
        END,
        created_at
@@ -166,23 +201,27 @@ async function refreshUserScoreCache(
 ): Promise<void> {
   await client.query(
     `INSERT INTO user_scores (
-       user_id, total_points, first_ever_count, first_user_count, repeat_count, updated_at
+       user_id, total_points,
+       first_ever_count, first_user_count, stale_refresh_count, repeat_count,
+       updated_at
      )
      SELECT
        $1::uuid,
        COALESCE(SUM(points), 0)::bigint,
        COUNT(*) FILTER (WHERE points = 10)::int,
-       COUNT(*) FILTER (WHERE points = 5)::int,
-       COUNT(*) FILTER (WHERE points = 1)::int,
+       COUNT(*) FILTER (WHERE points =  5)::int,
+       COUNT(*) FILTER (WHERE points =  3)::int,
+       COUNT(*) FILTER (WHERE points =  1)::int,
        now()
        FROM score_events
       WHERE user_id = $1::uuid
      ON CONFLICT (user_id) DO UPDATE
-       SET total_points     = EXCLUDED.total_points,
-           first_ever_count = EXCLUDED.first_ever_count,
-           first_user_count = EXCLUDED.first_user_count,
-           repeat_count     = EXCLUDED.repeat_count,
-           updated_at       = EXCLUDED.updated_at`,
+       SET total_points        = EXCLUDED.total_points,
+           first_ever_count    = EXCLUDED.first_ever_count,
+           first_user_count    = EXCLUDED.first_user_count,
+           stale_refresh_count = EXCLUDED.stale_refresh_count,
+           repeat_count        = EXCLUDED.repeat_count,
+           updated_at          = EXCLUDED.updated_at`,
     [userId],
   );
 }

@@ -207,32 +207,34 @@ export function renderTile(
 // ---------------------------------------------------------------------------
 // Incident tiles — brake events and close-call events.
 //
-// Renders one filled circle per cell with a count-based color ramp. Discrete
-// (not interpolated) thresholds mirror BrakeMapTileOverlay.swift / the
-// close-call equivalent on iOS, so a busy cell looks the same on every
-// surface.
+// Renders one filled CELL per cell (same 20 ft grid as the bumpiness
+// layer, same glow halo) with a count-based color ramp. Discrete
+// thresholds mirror the iOS BrakeMapTileOverlay color scheme.
 //
-// 1 event       → yellow
-// 2–3 events    → orange
-// 4–5 events    → red
-// 6+ events     → purple
+//   0 events    → green   (cell has bump coverage; no incidents)
+//   1 event     → yellow
+//   2–3 events  → orange
+//   4–5 events  → red
+//   6+ events   → purple
+//
+// The green-for-0 tier matters because the brake/close-call tile
+// routes now LEFT JOIN against bump_cells (or the user's coverage)
+// — a cell with bump data but no events shows green so the layer is
+// visually complete and comparable to the bumpiness layer cell-for-
+// cell. Earlier circle-based renders skipped 0-count cells entirely.
 // ---------------------------------------------------------------------------
 
 export type IncidentCell = { ix: number; iy: number; count: number };
 
-const INCIDENT_ALPHA = 0.85;
+const INCIDENT_CELL_ALPHA = 0.78;
 
 function incidentColor(count: number): string {
-  if (count >= 6) return `rgba(170, 0, 221, ${INCIDENT_ALPHA})`;     // purple
-  if (count >= 4) return `rgba(221, 34, 34, ${INCIDENT_ALPHA})`;     // red
-  if (count >= 2) return `rgba(255, 119, 0, ${INCIDENT_ALPHA})`;     // orange
-  return `rgba(255, 187, 0, ${INCIDENT_ALPHA})`;                     // yellow
+  if (count >= 6) return `rgba(170, 0, 221, ${INCIDENT_CELL_ALPHA})`;  // purple
+  if (count >= 4) return `rgba(221, 34, 34, ${INCIDENT_CELL_ALPHA})`;  // red
+  if (count >= 2) return `rgba(255, 119, 0, ${INCIDENT_CELL_ALPHA})`;  // orange
+  if (count >= 1) return `rgba(255, 187, 0, ${INCIDENT_CELL_ALPHA})`;  // yellow
+  return `rgba(0, 204, 0, ${INCIDENT_CELL_ALPHA})`;                     // green (count = 0)
 }
-
-// Tile-pixel radius for incident circles. Picked to stay readable at the
-// zoom levels users typically browse the public map at (z=13–18) while
-// still allowing cluster visibility at lower zooms.
-const INCIDENT_BASE_RADIUS_PX = 6;
 
 export function renderIncidentTile(
   z: number,
@@ -245,32 +247,53 @@ export function renderIncidentTile(
   const canvas = createCanvas(TILE_SIZE, TILE_SIZE);
   const ctx = canvas.getContext('2d');
 
-  // Scale circles up a little at higher zoom so individual events read as
-  // distinct rather than dotted-pattern noise, but cap so they don't bleed
-  // into adjacent cells.
-  const radius = Math.min(10, INCIDENT_BASE_RADIUS_PX + Math.max(0, z - 14));
-
+  // Same cell-rect layout as the bumpiness renderTile path — keep
+  // the 1 px floor for low-zoom so a single sub-pixel cell still
+  // shows up rather than getting anti-aliased into invisibility.
+  type Rect = { px: number; py: number; w: number; h: number; count: number };
+  const rects: Rect[] = [];
   for (const c of cells) {
-    if (c.count <= 0) continue;
     const origin = cellOrigin(c.ix, c.iy);
-    const center = lonLatToTilePx(
-      z,
-      x,
-      y,
-      origin.lon + CELL_LON_DEG / 2,
-      origin.lat + CELL_LAT_DEG / 2,
-    );
-    // White halo (1.5 px wider) underneath for legibility on dark or busy
-    // basemaps.
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, radius + 1.5, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-    ctx.fill();
+    const tl = lonLatToTilePx(z, x, y, origin.lon, origin.lat + CELL_LAT_DEG);
+    const br = lonLatToTilePx(z, x, y, origin.lon + CELL_LON_DEG, origin.lat);
+    const cx = (tl.x + br.x) / 2;
+    const cy = (tl.y + br.y) / 2;
+    const w = Math.max(1, br.x - tl.x);
+    const h = Math.max(1, br.y - tl.y);
+    rects.push({
+      px: cx - w / 2,
+      py: cy - h / 2,
+      w,
+      h,
+      count: c.count,
+    });
+  }
+  if (rects.length === 0) return EMPTY_TILE;
 
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
-    ctx.fillStyle = incidentColor(c.count);
-    ctx.fill();
+  // Glow pass — identical to renderTile. The purple-glow halo makes
+  // sparse data visible at any zoom and visually ties the incident
+  // layers to the bumpiness layer.
+  ctx.save();
+  ctx.shadowColor = GLOW_OUTER_COLOR;
+  ctx.shadowBlur = GLOW_OUTER_BLUR;
+  ctx.fillStyle = GLOW_OUTER_COLOR;
+  ctx.beginPath();
+  for (const r of rects) ctx.rect(r.px, r.py, r.w, r.h);
+  ctx.fill();
+  ctx.shadowColor = GLOW_INNER_COLOR;
+  ctx.shadowBlur = GLOW_INNER_BLUR;
+  ctx.fillStyle = GLOW_INNER_COLOR;
+  ctx.beginPath();
+  for (const r of rects) ctx.rect(r.px, r.py, r.w, r.h);
+  ctx.fill();
+  ctx.restore();
+
+  // Colored-cells pass. clearRect first so the halo doesn't tint
+  // the fill (matches renderTile's behaviour).
+  for (const r of rects) {
+    ctx.clearRect(r.px, r.py, r.w, r.h);
+    ctx.fillStyle = incidentColor(r.count);
+    ctx.fillRect(r.px, r.py, r.w, r.h);
   }
 
   return canvas.toBuffer('image/png');

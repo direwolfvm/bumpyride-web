@@ -11,22 +11,36 @@ import {
   parseTileMode,
   parseTilePercentile,
   type TileMode,
+  type TilePercentile,
 } from '@/lib/tile-mode';
 import { getOrComputeThreshold, NO_DATA_THRESHOLD } from '@/lib/percentile-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Public brake-event tile renderer. See ./close-calls/.../route.ts
-// and the public bumpiness route at /api/tiles/public/[z]/[x]/[y]
-// for the design rationale shared between all three layers.
+// Public brake-event tile renderer.
 //
-// Accepts ?mode=all|3mo|last10 and ?percentile=all|top10|bottom10.
-// percentile is computed across gate-passing cells globally and
-// memoised in src/lib/percentile-cache.ts — the per-tile query just
-// pulls the gate-passing cells in this tile's bbox and filters
-// against the cached (lo, hi) cutoffs in JS. Same pattern as the
-// personal user tile route's hotfix from PR #36.
+// Coverage cells: every cell that passes the BUMPINESS privacy gate
+// (3+ distinct bumpiness contributors OR one with public_map_eager)
+// gets rendered, so the brake layer is visually complete — you see
+// every cell the bumpiness layer shows, colored by brake activity.
+//
+// Brake counts: LEFT-JOINed in, computed against ONLY brake events
+// whose contributors pass the brake-specific gate. Cells where bump
+// coverage exists but brake events don't pass the gate (e.g. only
+// one rider has braked there) render as count=0 — green tier in the
+// new cells renderer — which keeps single-user brake data from
+// leaking via a "1-event" reveal.
+//
+// ?mode=all|3mo|last10 applies to the brake-event time window.
+// Bump coverage is always lifetime (gates from bump_cells), so a
+// brake mode-filter change just re-buckets the colors, never the
+// cell set.
+//
+// ?percentile=all|top10|bottom10 operates on brake-gate-passing
+// cells only (count > 0). With percentile=top10/bottom10 we filter
+// the rendered cells to that bucket — coverage cells with count=0
+// drop out so the rendered set matches the percentile semantics.
 
 const MIN_PUBLIC_CELL_USERS = Math.max(
   1,
@@ -46,11 +60,26 @@ const PNG_HEADERS = {
 const respondTile = (png: Buffer, status = 200) =>
   new Response(new Uint8Array(png), { status, headers: PNG_HEADERS });
 
-// CTE producing every gate-passing cell for the given mode. No bbox
-// filter — both the per-tile query and the threshold compute apply
-// the bbox in their outer SELECTs (or skip it, in the case of the
-// global threshold).
-function cellsCteSource(mode: TileMode): string {
+// Bump-coverage cells (privacy-gated bumpiness cells). No bbox here —
+// applied by the outer SELECT. Cheap because bump_cells is indexed
+// and the EXISTS gate uses the contributors PK.
+const BUMP_COVERAGE_CTE = `
+  SELECT bc.ix, bc.iy
+    FROM bump_cells bc
+   WHERE EXISTS (
+     SELECT 1
+       FROM bump_cell_contributors bcc
+       JOIN users u ON u.id = bcc.user_id
+      WHERE bcc.ix = bc.ix AND bcc.iy = bc.iy
+     HAVING count(*) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(u.public_map_eager)
+   )
+`;
+
+// Brake counts per cell, applying the brake-specific privacy gate
+// and the time-window mode. Cells with no gate-passing brake events
+// don't appear in this CTE — they'll be LEFT-JOINed against the
+// coverage set and surface as count=0.
+function brakeCountsCte(mode: TileMode): string {
   const filter =
     mode === '3mo' ? "AND b.timestamp > now() - interval '3 months'" : '';
   const sourceCte = `
@@ -105,8 +134,10 @@ export async function GET(
   if (z < 0 || z > 22) return respondTile(emptyTilePng(), 400);
 
   const url = new URL(req.url);
-  const mode = parseTileMode(url.searchParams.get('mode'));
-  const percentile = parseTilePercentile(url.searchParams.get('percentile'));
+  const mode: TileMode = parseTileMode(url.searchParams.get('mode'));
+  const percentile: TilePercentile = parseTilePercentile(
+    url.searchParams.get('percentile'),
+  );
   const bbox = tileQueryBbox(z, x, y);
 
   const ixMin = Math.floor(bbox.west / CELL_LON_DEG);
@@ -116,16 +147,17 @@ export async function GET(
 
   let cells: IncidentCell[];
   try {
-    // Same bbox query for every percentile, threshold applied in JS
-    // when needed. The cells CTE itself doesn't depend on bbox or
-    // percentile, so cold-path scans the gate-passing set once per
-    // tile — same cost as the prior `?percentile=all` path.
+    // Coverage cells in this tile's bbox, with brake counts joined
+    // in. COALESCE the LEFT JOIN to 0 so cells without brake gate
+    // passing surface explicitly as the green "no incidents" tier.
     const bboxSql = `
-      WITH cells AS (${cellsCteSource(mode)})
-      SELECT ix, iy, count
-        FROM cells
-       WHERE ix BETWEEN $1 AND $2
-         AND iy BETWEEN $3 AND $4
+      WITH coverage AS (${BUMP_COVERAGE_CTE}),
+           counts   AS (${brakeCountsCte(mode)})
+      SELECT cov.ix, cov.iy, COALESCE(cnt.count, 0)::int AS count
+        FROM coverage cov
+        LEFT JOIN counts cnt ON cnt.ix = cov.ix AND cnt.iy = cov.iy
+       WHERE cov.ix BETWEEN $1 AND $2
+         AND cov.iy BETWEEN $3 AND $4
     `;
     const res = await pool.query<{ ix: number; iy: number; count: number }>(
       bboxSql,
@@ -138,15 +170,20 @@ export async function GET(
     }));
 
     if (percentile !== 'all') {
+      // Percentile thresholds are computed over the BRAKE-gate-passing
+      // cells only (i.e. count > 0) — including all the zero-coverage
+      // cells would swamp the distribution. When the user picks a
+      // percentile bucket, we drop zero-coverage cells from the
+      // render entirely.
       const threshold = await getOrComputeThreshold(
         `public:brakes:${mode}`,
         async (client) => {
           const r = await client.query<{ lo: number | null; hi: number | null }>(
-            `WITH cells AS (${cellsCteSource(mode)})
+            `WITH counts AS (${brakeCountsCte(mode)})
              SELECT
                percentile_cont(0.1) WITHIN GROUP (ORDER BY count) AS lo,
                percentile_cont(0.9) WITHIN GROUP (ORDER BY count) AS hi
-             FROM cells`,
+             FROM counts`,
           );
           const row = r.rows[0];
           if (!row || row.lo == null || row.hi == null) {
@@ -155,9 +192,12 @@ export async function GET(
           return { lo: Number(row.lo), hi: Number(row.hi) };
         },
       );
-      cells = cells.filter((c) =>
-        percentile === 'top10' ? c.count <= threshold.lo : c.count >= threshold.hi,
-      );
+      cells = cells.filter((c) => {
+        if (c.count <= 0) return false;
+        return percentile === 'top10'
+          ? c.count <= threshold.lo
+          : c.count >= threshold.hi;
+      });
     }
   } catch (err) {
     console.error('public brake tile query failed', err);

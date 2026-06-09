@@ -44,14 +44,18 @@ export function jsonFileResponse(
 }
 
 /**
- * Map a per-cell event count to the same yellow → purple bin the
+ * Map a per-cell event count to the same green → purple bin the
  * incident-tile renderer uses. Exposed in `kind=display` exports so
  * consumers can reconstruct the on-screen color without re-running
- * the binning logic.
+ * the binning logic. The green-for-0 tier matches the cell renderer
+ * — cells with bump coverage but no incidents render green.
  */
-export function incidentColorBin(count: number): 'yellow' | 'orange' | 'red' | 'purple' {
+export function incidentColorBin(
+  count: number,
+): 'green' | 'yellow' | 'orange' | 'red' | 'purple' {
   if (count >= 6) return 'purple';
   if (count >= 4) return 'red';
   if (count >= 2) return 'orange';
-  return 'yellow';
+  if (count >= 1) return 'yellow';
+  return 'green';
 }

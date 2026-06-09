@@ -11,20 +11,21 @@ import {
   parseTileMode,
   parseTilePercentile,
   type TileMode,
+  type TilePercentile,
 } from '@/lib/tile-mode';
 import { getOrComputeThreshold, NO_DATA_THRESHOLD } from '@/lib/percentile-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Public close-call tile renderer. Same shape as the brake tile route
-// — different source table, same per-feature 3-distinct-rider gate.
+// Public close-call tile renderer. Same shape as the brake route:
 //
-// Accepts ?mode= and ?percentile= with identical semantics. Threshold
-// for top10/bottom10 is memoised in src/lib/percentile-cache.ts —
-// the per-tile query just pulls the gate-passing cells in this
-// tile's bbox and filters by the cached cutoff in JS. Same pattern
-// as the personal user tile route's hotfix.
+//   Coverage cells = bumpiness-gate-passing cells (always lifetime).
+//   Close-call counts LEFT-JOINed in; cells without close-call gate
+//   passing render as count=0 (green tier) so single-user close-call
+//   data isn't leaked.
+//
+// See ./brakes/.../route.ts for the design rationale.
 
 const MIN_PUBLIC_CELL_USERS = Math.max(
   1,
@@ -44,7 +45,19 @@ const PNG_HEADERS = {
 const respondTile = (png: Buffer, status = 200) =>
   new Response(new Uint8Array(png), { status, headers: PNG_HEADERS });
 
-function cellsCteSource(mode: TileMode): string {
+const BUMP_COVERAGE_CTE = `
+  SELECT bc.ix, bc.iy
+    FROM bump_cells bc
+   WHERE EXISTS (
+     SELECT 1
+       FROM bump_cell_contributors bcc
+       JOIN users u ON u.id = bcc.user_id
+      WHERE bcc.ix = bc.ix AND bcc.iy = bc.iy
+     HAVING count(*) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(u.public_map_eager)
+   )
+`;
+
+function closeCallCountsCte(mode: TileMode): string {
   const filter =
     mode === '3mo' ? "AND c.timestamp > now() - interval '3 months'" : '';
   const sourceCte = `
@@ -99,8 +112,10 @@ export async function GET(
   if (z < 0 || z > 22) return respondTile(emptyTilePng(), 400);
 
   const url = new URL(req.url);
-  const mode = parseTileMode(url.searchParams.get('mode'));
-  const percentile = parseTilePercentile(url.searchParams.get('percentile'));
+  const mode: TileMode = parseTileMode(url.searchParams.get('mode'));
+  const percentile: TilePercentile = parseTilePercentile(
+    url.searchParams.get('percentile'),
+  );
   const bbox = tileQueryBbox(z, x, y);
 
   const ixMin = Math.floor(bbox.west / CELL_LON_DEG);
@@ -111,11 +126,13 @@ export async function GET(
   let cells: IncidentCell[];
   try {
     const bboxSql = `
-      WITH cells AS (${cellsCteSource(mode)})
-      SELECT ix, iy, count
-        FROM cells
-       WHERE ix BETWEEN $1 AND $2
-         AND iy BETWEEN $3 AND $4
+      WITH coverage AS (${BUMP_COVERAGE_CTE}),
+           counts   AS (${closeCallCountsCte(mode)})
+      SELECT cov.ix, cov.iy, COALESCE(cnt.count, 0)::int AS count
+        FROM coverage cov
+        LEFT JOIN counts cnt ON cnt.ix = cov.ix AND cnt.iy = cov.iy
+       WHERE cov.ix BETWEEN $1 AND $2
+         AND cov.iy BETWEEN $3 AND $4
     `;
     const res = await pool.query<{ ix: number; iy: number; count: number }>(
       bboxSql,
@@ -132,11 +149,11 @@ export async function GET(
         `public:close-calls:${mode}`,
         async (client) => {
           const r = await client.query<{ lo: number | null; hi: number | null }>(
-            `WITH cells AS (${cellsCteSource(mode)})
+            `WITH counts AS (${closeCallCountsCte(mode)})
              SELECT
                percentile_cont(0.1) WITHIN GROUP (ORDER BY count) AS lo,
                percentile_cont(0.9) WITHIN GROUP (ORDER BY count) AS hi
-             FROM cells`,
+             FROM counts`,
           );
           const row = r.rows[0];
           if (!row || row.lo == null || row.hi == null) {
@@ -145,9 +162,12 @@ export async function GET(
           return { lo: Number(row.lo), hi: Number(row.hi) };
         },
       );
-      cells = cells.filter((c) =>
-        percentile === 'top10' ? c.count <= threshold.lo : c.count >= threshold.hi,
-      );
+      cells = cells.filter((c) => {
+        if (c.count <= 0) return false;
+        return percentile === 'top10'
+          ? c.count <= threshold.lo
+          : c.count >= threshold.hi;
+      });
     }
   } catch (err) {
     console.error('public close-call tile query failed', err);

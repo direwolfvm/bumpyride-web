@@ -106,6 +106,24 @@ const INCIDENT_NORM_DESCRIPTIONS: Record<IncidentNorm, string> = {
     'Divided by the number of distinct rides that touched the cell. Normalizes for popular streets — a busy corridor with many brakes might read calmer than a quiet street where every rider brakes.',
 };
 
+// Close-call view mode. Same shape as PrivateBumpMap — see notes
+// there. The events endpoint applies the public privacy gate
+// (≥3 distinct close-call contributors per cell, OR eager).
+type CloseCallView = 'cells' | 'events';
+const CLOSE_CALL_VIEWS: readonly CloseCallView[] = ['cells', 'events'];
+const CLOSE_CALL_VIEW_LABELS: Record<CloseCallView, string> = {
+  cells: 'Cells',
+  events: 'Events',
+};
+const CLOSE_CALL_VIEW_DESCRIPTIONS: Record<CloseCallView, string> = {
+  cells: 'Aggregate by 20 ft cell. Default. Privacy-gated by ≥3 contributors per cell.',
+  events:
+    'One marker per close-call event. Only shown in cells that pass the privacy gate, so an event being visible already implies the cell has ≥3 contributors.',
+};
+
+const EVENTS_SOURCE_ID = 'close-calls-events';
+const EVENTS_LAYER_ID = 'close-calls-events';
+
 function tileUrlFor(
   layerId: LayerId,
   base: string,
@@ -148,6 +166,9 @@ export function PublicBumpMap({
   const [mode, setMode] = useState<TileMode>('all');
   const [percentile, setPercentile] = useState<TilePercentile>('all');
   const [bumpAgg, setBumpAgg] = useState<TileBumpAgg>('avg');
+  const [closeCallView, setCloseCallView] = useState<CloseCallView>('cells');
+  const [eventsCount, setEventsCount] = useState<number | null>(null);
+  const [eventsTruncated, setEventsTruncated] = useState(false);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -181,6 +202,32 @@ export function PublicBumpMap({
           },
         });
       }
+      // Events overlay — GeoJSON source + circle layer. Hidden
+      // until the user picks close-calls + Events view.
+      map.addSource(EVENTS_SOURCE_ID, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer({
+        id: EVENTS_LAYER_ID,
+        type: 'circle',
+        source: EVENTS_SOURCE_ID,
+        layout: { visibility: 'none' },
+        paint: {
+          'circle-radius': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            10, 3,
+            15, 6,
+            18, 10,
+          ],
+          'circle-color': '#ff6b6b',
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 1.5,
+          'circle-opacity': 0.85,
+        },
+      });
     });
 
     return () => {
@@ -194,23 +241,76 @@ export function PublicBumpMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minLat, maxLat, minLon, maxLon]);
 
-  // Layer-tab visibility toggle.
+  // Layer-tab visibility toggle. Close-calls + events mode swaps
+  // the raster close-calls layer for the GeoJSON events overlay.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+    const showEvents = active === 'close-calls' && closeCallView === 'events';
     const apply = () => {
       for (const l of LAYERS) {
         if (!map.getLayer(l.id)) continue;
+        const shouldShow =
+          l.id === active && !(l.id === 'close-calls' && showEvents);
         map.setLayoutProperty(
           l.id,
           'visibility',
-          l.id === active ? 'visible' : 'none',
+          shouldShow ? 'visible' : 'none',
+        );
+      }
+      if (map.getLayer(EVENTS_LAYER_ID)) {
+        map.setLayoutProperty(
+          EVENTS_LAYER_ID,
+          'visibility',
+          showEvents ? 'visible' : 'none',
         );
       }
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [active]);
+  }, [active, closeCallView]);
+
+  // Close-call events fetcher. See PrivateBumpMap for the mirror.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const showEvents = active === 'close-calls' && closeCallView === 'events';
+    if (!showEvents) {
+      setEventsCount(null);
+      setEventsTruncated(false);
+      return;
+    }
+
+    let cancelled = false;
+    async function refresh() {
+      if (!map) return;
+      const b = map.getBounds();
+      const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+      const params: string[] = [`bbox=${encodeURIComponent(bbox)}`];
+      if (mode === '3mo') params.push('mode=3mo');
+      try {
+        const res = await fetch(`/api/public/close-calls/events?${params.join('&')}`);
+        if (cancelled || !res.ok) return;
+        const json = (await res.json()) as GeoJSON.FeatureCollection;
+        const src = map.getSource(EVENTS_SOURCE_ID);
+        if (src && 'setData' in src) {
+          (src as maplibregl.GeoJSONSource).setData(json);
+        }
+        setEventsCount(json.features.length);
+        setEventsTruncated(res.headers.get('X-Truncated') === 'true');
+      } catch (err) {
+        if (!cancelled) console.error('public events fetch failed', err);
+      }
+    }
+
+    refresh();
+    const onMoveEnd = () => refresh();
+    map.on('moveend', onMoveEnd);
+    return () => {
+      cancelled = true;
+      map.off('moveend', onMoveEnd);
+    };
+  }, [active, closeCallView, mode]);
 
   // Mode + percentile + agg toggle. setTiles on each raster source
   // replaces the URL template and invalidates the source's tile cache,
@@ -369,7 +469,10 @@ export function PublicBumpMap({
             })}
           </div>
         )}
-        {(active === 'brakes' || active === 'close-calls') && (
+        {/* Normalization applies to cell-aggregated incident views.
+            On close-calls + events there's nothing to normalize. */}
+        {(active === 'brakes' ||
+          (active === 'close-calls' && closeCallView === 'cells')) && (
           <div
             role="tablist"
             aria-label="Normalization"
@@ -397,17 +500,49 @@ export function PublicBumpMap({
             })}
           </div>
         )}
+        {active === 'close-calls' && (
+          <div
+            role="tablist"
+            aria-label="View"
+            className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
+          >
+            {CLOSE_CALL_VIEWS.map((v) => {
+              const isActive = closeCallView === v;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setCloseCallView(v)}
+                  title={CLOSE_CALL_VIEW_DESCRIPTIONS[v]}
+                  className={`px-3 py-2 text-sm font-medium transition ${
+                    isActive
+                      ? 'bg-accent-strong text-white'
+                      : 'text-text-muted hover:bg-bg hover:text-text'
+                  }`}
+                >
+                  {CLOSE_CALL_VIEW_LABELS[v]}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
       <p className="mb-3 text-xs text-text-muted">
-        {active === 'bumps' && bumpAgg !== 'avg'
-          ? BUMP_AGG_DESCRIPTIONS[bumpAgg]
-          : active === 'brakes' && metric !== 'count'
-            ? INCIDENT_METRIC_DESCRIPTIONS[metric]
-            : (active === 'brakes' || active === 'close-calls') && norm !== 'raw'
-              ? INCIDENT_NORM_DESCRIPTIONS[norm]
-              : percentile === 'all'
-                ? MODE_DESCRIPTIONS[mode]
-                : PERCENTILE_DESCRIPTIONS[percentile]}
+        {active === 'close-calls' && closeCallView === 'events' && eventsCount !== null
+          ? `Showing ${eventsCount.toLocaleString()} event${eventsCount === 1 ? '' : 's'}${eventsTruncated ? ' (capped — zoom in for full set)' : ''}.`
+          : active === 'bumps' && bumpAgg !== 'avg'
+            ? BUMP_AGG_DESCRIPTIONS[bumpAgg]
+            : active === 'brakes' && metric !== 'count'
+              ? INCIDENT_METRIC_DESCRIPTIONS[metric]
+              : active === 'close-calls' && closeCallView === 'events'
+                ? CLOSE_CALL_VIEW_DESCRIPTIONS.events
+                : (active === 'brakes' || active === 'close-calls') && norm !== 'raw'
+                  ? INCIDENT_NORM_DESCRIPTIONS[norm]
+                  : percentile === 'all'
+                    ? MODE_DESCRIPTIONS[mode]
+                    : PERCENTILE_DESCRIPTIONS[percentile]}
       </p>
       <div
         ref={containerRef}

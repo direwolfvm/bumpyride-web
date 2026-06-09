@@ -125,6 +125,28 @@ const INCIDENT_NORM_HELP: Record<IncidentNorm, string> = {
     'Divided by the number of distinct rides that touched the cell. Normalizes for "how often I ride here" — a hotspot you ride every day reads differently from a hotspot you’ve only ridden once.',
 };
 
+// Close-call view mode. The brakes and bumps layers are always cell-
+// aggregated; only the close-call layer has the per-event view too,
+// since close-calls are inherently sparse and a single tapped marker
+// is the rider's record of one specific moment.
+type CloseCallView = 'cells' | 'events';
+const CLOSE_CALL_VIEWS: readonly CloseCallView[] = ['cells', 'events'];
+const CLOSE_CALL_VIEW_LABELS: Record<CloseCallView, string> = {
+  cells: 'Cells',
+  events: 'Events',
+};
+const CLOSE_CALL_VIEW_HELP: Record<CloseCallView, string> = {
+  cells: 'Aggregate by 20 ft cell — every cell with bump coverage renders, color-coded by close-call activity. Default.',
+  events:
+    'One marker per close-call event. Best for seeing exactly where each near-miss happened. Fetched live for the current viewport.',
+};
+
+// MapLibre source + layer IDs for the events GeoJSON layer. Kept
+// separate from the raster source so we can toggle visibility
+// independently without disturbing the raster tile cache.
+const EVENTS_SOURCE_ID = 'close-calls-events';
+const EVENTS_LAYER_ID = 'close-calls-events';
+
 // localStorage keys. Migrated from the old `bumpmap.mode` key
 // (which used to hold mounted|pocket|all — now the rides axis).
 const STORE_RIDES = 'bumpmap.rides';
@@ -183,6 +205,7 @@ export function PrivateBumpMap({
   const [bumpAgg, setBumpAgg] = useState<TileBumpAgg>('avg');
   const [metric, setMetric] = useState<IncidentMetric>('count');
   const [norm, setNorm] = useState<IncidentNorm>('raw');
+  const [closeCallView, setCloseCallView] = useState<CloseCallView>('cells');
 
   // SSR-safe rides hydration on mount.
   useEffect(() => {
@@ -230,6 +253,35 @@ export function PrivateBumpMap({
           layout: { visibility: l.id === 'bumps' ? 'visible' : 'none' },
         });
       }
+      // Events overlay — a GeoJSON source + circle layer, hidden
+      // until the user picks close-calls + Events view. Lives on
+      // top of the raster layers so markers aren't washed out.
+      map.addSource(EVENTS_SOURCE_ID, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer({
+        id: EVENTS_LAYER_ID,
+        type: 'circle',
+        source: EVENTS_SOURCE_ID,
+        layout: { visibility: 'none' },
+        paint: {
+          // Zoom-scaled radius so markers are visible at city zoom
+          // but don't overwhelm at street zoom.
+          'circle-radius': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            10, 3,
+            15, 6,
+            18, 10,
+          ],
+          'circle-color': '#ff6b6b',
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 1.5,
+          'circle-opacity': 0.85,
+        },
+      });
     });
 
     return () => {
@@ -241,23 +293,36 @@ export function PrivateBumpMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minLat, maxLat, minLon, maxLon]);
 
-  // Layer-tab visibility toggle.
+  // Layer-tab visibility toggle. Close-calls + events mode swaps
+  // the raster close-calls layer for the GeoJSON events overlay.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+    const showEvents = active === 'close-calls' && closeCallView === 'events';
     const apply = () => {
       for (const l of LAYERS) {
         if (!map.getLayer(l.id)) continue;
+        // Hide raster close-calls when in events mode; everything
+        // else follows the active-tab rule.
+        const shouldShow =
+          l.id === active && !(l.id === 'close-calls' && showEvents);
         map.setLayoutProperty(
           l.id,
           'visibility',
-          l.id === active ? 'visible' : 'none',
+          shouldShow ? 'visible' : 'none',
+        );
+      }
+      if (map.getLayer(EVENTS_LAYER_ID)) {
+        map.setLayoutProperty(
+          EVENTS_LAYER_ID,
+          'visibility',
+          showEvents ? 'visible' : 'none',
         );
       }
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [active]);
+  }, [active, closeCallView]);
 
   // Rides / mode / percentile / agg changes → retile every layer.
   useEffect(() => {
@@ -276,21 +341,79 @@ export function PrivateBumpMap({
     else map.once('load', apply);
   }, [rides, mode, percentile, bumpAgg, metric, norm]);
 
+  // Close-call events fetcher. Active whenever close-calls + events
+  // is the current view. Refetches on viewport change (moveend) and
+  // whenever the rides / mode filters change. Reports the count
+  // back so the caption can show "showing N events".
+  const [eventsCount, setEventsCount] = useState<number | null>(null);
+  const [eventsTruncated, setEventsTruncated] = useState(false);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const showEvents = active === 'close-calls' && closeCallView === 'events';
+    if (!showEvents) {
+      setEventsCount(null);
+      setEventsTruncated(false);
+      return;
+    }
+
+    let cancelled = false;
+    async function refresh() {
+      if (!map) return;
+      const b = map.getBounds();
+      const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+      const params: string[] = [`bbox=${encodeURIComponent(bbox)}`, `rides=${rides}`];
+      if (mode === '3mo') params.push('mode=3mo');
+      // mode=last10 doesn't have a clean events-mode analogue;
+      // /api/me/close-calls/events ignores it and serves all-mode.
+      try {
+        const res = await fetch(`/api/me/close-calls/events?${params.join('&')}`, {
+          credentials: 'same-origin',
+        });
+        if (cancelled || !res.ok) return;
+        const json = (await res.json()) as GeoJSON.FeatureCollection;
+        const src = map.getSource(EVENTS_SOURCE_ID);
+        if (src && 'setData' in src) {
+          (src as maplibregl.GeoJSONSource).setData(json);
+        }
+        setEventsCount(json.features.length);
+        setEventsTruncated(res.headers.get('X-Truncated') === 'true');
+      } catch (err) {
+        if (!cancelled) console.error('events fetch failed', err);
+      }
+    }
+
+    refresh();
+    const onMoveEnd = () => refresh();
+    map.on('moveend', onMoveEnd);
+    return () => {
+      cancelled = true;
+      map.off('moveend', onMoveEnd);
+    };
+  }, [active, closeCallView, rides, mode]);
+
   // Live caption beneath the tab strips. Layer-specific axes win
-  // (agg for bumps; metric/norm for incidents); then the global
-  // axes (percentile > mode > rides).
+  // (agg for bumps; metric/norm/view for incidents); then the
+  // global axes (percentile > mode > rides).
+  const eventsCaption =
+    active === 'close-calls' && closeCallView === 'events' && eventsCount !== null
+      ? `Showing ${eventsCount.toLocaleString()} event${eventsCount === 1 ? '' : 's'}${eventsTruncated ? ' (capped — zoom in for full set)' : ''}.`
+      : null;
   const caption =
-    active === 'bumps' && bumpAgg !== 'avg'
+    eventsCaption ??
+    (active === 'bumps' && bumpAgg !== 'avg'
       ? BUMP_AGG_HELP[bumpAgg]
       : active === 'brakes' && metric !== 'count'
         ? INCIDENT_METRIC_HELP[metric]
-        : (active === 'brakes' || active === 'close-calls') && norm !== 'raw'
-          ? INCIDENT_NORM_HELP[norm]
-          : percentile !== 'all'
-            ? PERCENTILE_HELP[percentile]
-            : mode !== 'all'
-              ? MODE_HELP[mode]
-              : RIDES_HELP[rides];
+        : active === 'close-calls' && closeCallView === 'events'
+          ? CLOSE_CALL_VIEW_HELP.events
+          : (active === 'brakes' || active === 'close-calls') && norm !== 'raw'
+            ? INCIDENT_NORM_HELP[norm]
+            : percentile !== 'all'
+              ? PERCENTILE_HELP[percentile]
+              : mode !== 'all'
+                ? MODE_HELP[mode]
+                : RIDES_HELP[rides]);
 
   return (
     <div>
@@ -355,7 +478,11 @@ export function PrivateBumpMap({
             onChange={(v) => setMetric(v as IncidentMetric)}
           />
         )}
-        {(active === 'brakes' || active === 'close-calls') && (
+        {/* Normalization applies to cell-aggregated incident views only.
+            When the user picks close-calls + events, hide it — there's
+            nothing to normalize on a per-event view. */}
+        {active === 'brakes' ||
+        (active === 'close-calls' && closeCallView === 'cells') ? (
           <TabStrip
             ariaLabel="Normalization"
             values={INCIDENT_NORMS.map((n) => ({
@@ -365,6 +492,18 @@ export function PrivateBumpMap({
             }))}
             current={norm}
             onChange={(v) => setNorm(v as IncidentNorm)}
+          />
+        ) : null}
+        {active === 'close-calls' && (
+          <TabStrip
+            ariaLabel="View"
+            values={CLOSE_CALL_VIEWS.map((v) => ({
+              id: v,
+              label: CLOSE_CALL_VIEW_LABELS[v],
+              help: CLOSE_CALL_VIEW_HELP[v],
+            }))}
+            current={closeCallView}
+            onChange={(v) => setCloseCallView(v as CloseCallView)}
           />
         )}
       </div>

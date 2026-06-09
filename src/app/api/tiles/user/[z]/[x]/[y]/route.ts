@@ -9,15 +9,37 @@ import {
   tileQueryBbox,
   type Cell,
 } from '@/lib/tile-renderer';
-import { parseTilePercentile, type TilePercentile } from '@/lib/tile-mode';
+import {
+  parseTileMode,
+  parseTilePercentile,
+  type TileMode,
+  type TilePercentile,
+} from '@/lib/tile-mode';
+import {
+  parseRidesFilter,
+  ridesFilterSql,
+  type RidesFilter,
+} from '@/lib/user-tile-helpers';
 import { getOrComputeThreshold, NO_DATA_THRESHOLD } from '@/lib/percentile-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Per-user bump-map tiles. Aggregates the user's own ride_points on demand
-// (no maintained user_bump_cells table yet — see README/Phase 4 notes for
-// the optimisation path when scale demands it).
+// Per-user bump-map tiles. Aggregates the user's own ride_points on
+// demand — no maintained user_bump_cells table.
+//
+// Query parameters (all optional, all default to friendly choices):
+//   ?rides=mounted|pocket|all   ride-mode filter; default mounted.
+//                               (Renamed from the previous `?mode=`
+//                               so it doesn't collide with the time-
+//                               window mode below — see lib/user-
+//                               tile-helpers.ts for legacy handling.)
+//   ?mode=all|3mo|last10        time window; default all.
+//   ?percentile=all|top10|bottom10  percentile filter; default all.
+//
+// Calibration: pocket-mode samples get scaled by the rider's
+// pocket_gain when pocket_confidence >= CONFIDENCE_FLOOR. Matches
+// the iOS on-device behaviour exactly.
 
 const PNG_HEADERS = {
   'Content-Type': 'image/png',
@@ -27,14 +49,129 @@ const PNG_HEADERS = {
 const NOT_FOUND_TILE = (status = 200) =>
   new Response(new Uint8Array(emptyTilePng()), { status, headers: PNG_HEADERS });
 
+// Per-cell bumpiness aggregation expression, with pocket calibration
+// applied per-sample. Used as the SELECT body for both the bbox query
+// and the threshold-compute path.
+const CELL_AGGREGATE_EXPR = `
+  floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
+  floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+  SUM(
+    CASE
+      WHEN r.pocket_mode = TRUE
+        AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
+        THEN rp.bumpiness * u.pocket_gain
+      ELSE rp.bumpiness
+    END
+  )::float8 AS sum,
+  COUNT(*)::int AS count
+`;
+
+// For the last-10-samples-per-cell mode we need the per-sample
+// calibrated bumpiness value (no SUM yet), so we expose that as a
+// separate fragment that the windowed CTE projects.
+const PER_SAMPLE_EXPR = `
+  floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
+  floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+  CASE
+    WHEN r.pocket_mode = TRUE
+      AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
+      THEN rp.bumpiness * u.pocket_gain
+    ELSE rp.bumpiness
+  END AS bump,
+  rp.timestamp
+`;
+
+function sourceFrom(rides: RidesFilter, timeFilter: string): string {
+  return `
+    FROM ride_points rp
+    JOIN rides r ON r.ride_uuid = rp.ride_uuid
+    JOIN users u ON u.id = r.user_id
+    WHERE r.user_id = $1
+      ${ridesFilterSql(rides)}
+      ${timeFilter}
+  `;
+}
+
+// Build the bbox-bounded per-tile query for the given (rides, mode).
+function bboxQuery(rides: RidesFilter, mode: TileMode): string {
+  const timeFilter =
+    mode === '3mo' ? "AND rp.timestamp > now() - interval '3 months'" : '';
+  const bboxFilter = `
+    AND rp.latitude  BETWEEN $2 AND $3
+    AND rp.longitude BETWEEN $4 AND $5
+  `;
+  if (mode === 'last10') {
+    return `
+      WITH samples AS (
+        SELECT ${PER_SAMPLE_EXPR}
+        ${sourceFrom(rides, '')}
+        ${bboxFilter}
+      ),
+      ranked AS (
+        SELECT *, row_number() OVER (PARTITION BY ix, iy ORDER BY timestamp DESC) AS rn
+          FROM samples
+      )
+      SELECT ix, iy, SUM(bump)::float8 AS sum, COUNT(*)::int AS count
+        FROM ranked
+       WHERE rn <= 10
+       GROUP BY ix, iy
+    `;
+  }
+  return `
+    SELECT ${CELL_AGGREGATE_EXPR}
+    ${sourceFrom(rides, timeFilter)}
+    ${bboxFilter}
+    GROUP BY ix, iy
+  `;
+}
+
+// Threshold-compute path: same shape, no bbox.
+function thresholdQuery(rides: RidesFilter, mode: TileMode): string {
+  const timeFilter =
+    mode === '3mo' ? "AND rp.timestamp > now() - interval '3 months'" : '';
+  if (mode === 'last10') {
+    return `
+      WITH samples AS (
+        SELECT ${PER_SAMPLE_EXPR}
+        ${sourceFrom(rides, '')}
+      ),
+      ranked AS (
+        SELECT *, row_number() OVER (PARTITION BY ix, iy ORDER BY timestamp DESC) AS rn
+          FROM samples
+      ),
+      cells AS (
+        SELECT ix, iy, SUM(bump)::float8 AS sum, COUNT(*)::int AS count
+          FROM ranked
+         WHERE rn <= 10
+         GROUP BY ix, iy
+      ),
+      filtered AS (SELECT * FROM cells WHERE count > 0)
+      SELECT
+        percentile_cont(0.1) WITHIN GROUP (ORDER BY sum / count) AS lo,
+        percentile_cont(0.9) WITHIN GROUP (ORDER BY sum / count) AS hi
+      FROM filtered
+    `;
+  }
+  return `
+    WITH cells AS (
+      SELECT ${CELL_AGGREGATE_EXPR}
+      ${sourceFrom(rides, timeFilter)}
+      GROUP BY ix, iy
+    ),
+    filtered AS (SELECT * FROM cells WHERE count > 0)
+    SELECT
+      percentile_cont(0.1) WITHIN GROUP (ORDER BY sum / count) AS lo,
+      percentile_cont(0.9) WITHIN GROUP (ORDER BY sum / count) AS hi
+    FROM filtered
+  `;
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ z: string; x: string; y: string }> },
 ) {
   const session = await auth();
   if (!session?.user?.id) {
-    // Browsers will display a broken tile rather than an error page.
-    // Return an empty tile + 401 so curl/logs still see the status.
     return NOT_FOUND_TILE(401);
   }
 
@@ -47,87 +184,21 @@ export async function GET(
   }
   if (z < 0 || z > 22) return NOT_FOUND_TILE(400);
 
-  // Filter chip on /bump-map, mirroring the iOS Bump Map's three-option
-  // segmented control:
-  //
-  //   ?mode=all      include every ride
-  //   ?mode=mounted  pocket_mode IS DISTINCT FROM TRUE   (mounted + null)
-  //   ?mode=pocket   pocket_mode = TRUE
-  //
-  // Default (missing/unknown) is `mounted` — same default as iOS. Legacy
-  // rides where pocket_mode IS NULL bucket with mounted (early users
-  // almost universally had handlebar mounts; bucketing them with
-  // mounted matches reality and doesn't penalise no-recourse).
-  const mode = req.nextUrl.searchParams.get('mode');
-  let modeFilter = '';
-  if (mode === 'all') {
-    modeFilter = '';
-  } else if (mode === 'pocket') {
-    modeFilter = 'AND r.pocket_mode = TRUE';
-  } else {
-    // mounted (default)
-    modeFilter = 'AND r.pocket_mode IS DISTINCT FROM TRUE';
-  }
-
-  // Best/worst-10% percentile filter, separate from the mounted/
-  // pocket mode above. `all` keeps the fast bbox-only path; `top10`
-  // (best, lowest avg bumpiness) and `bottom10` (worst, highest avg)
-  // compute the cutoff across all of this user's cells matching the
-  // mode filter — so "best 10%" means against the user's own
-  // dataset, not the viewport.
-  const percentile: TilePercentile = parseTilePercentile(
-    req.nextUrl.searchParams.get('percentile'),
-  );
+  const sp = req.nextUrl.searchParams;
+  const rides: RidesFilter = parseRidesFilter(sp.get('rides') ?? sp.get('mode'));
+  // If the legacy `?mode=mounted|pocket|all` slot consumed the param,
+  // treat the time-window as all. Otherwise read the new `?mode=` slot.
+  const legacyRideMode = ['mounted', 'pocket', 'all'].includes(sp.get('mode') ?? '');
+  const mode: TileMode = legacyRideMode
+    ? 'all'
+    : parseTileMode(sp.get('mode'));
+  const percentile: TilePercentile = parseTilePercentile(sp.get('percentile'));
 
   const bbox = tileQueryBbox(z, x, y);
 
-  // Aggregate cells from this user's ride_points. The per-cell
-  // bumpiness applies the same per-rider pocket calibration the
-  // iOS app uses on-device. Two SQL shapes:
-  //
-  //   percentile === 'all': aggregate within the bbox only (fast).
-  //   percentile != 'all':  aggregate over every cell (no bbox),
-  //                         compute percentile_cont threshold,
-  //                         then filter by bbox + threshold.
-  const cellAggregateExpr = `
-    floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
-    floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
-    SUM(
-      CASE
-        WHEN r.pocket_mode = TRUE
-          AND u.pocket_confidence >= ${CONFIDENCE_FLOOR}
-          THEN rp.bumpiness * u.pocket_gain
-        ELSE rp.bumpiness
-      END
-    )::float8 AS sum,
-    COUNT(*)::int AS count
-  `;
-  const sourceFrom = `
-    FROM ride_points rp
-    JOIN rides r ON r.ride_uuid = rp.ride_uuid
-    JOIN users u ON u.id = r.user_id
-    WHERE r.user_id = $1
-      ${modeFilter}
-  `;
-
-  // Same fast bbox query for every case. When a percentile is asked
-  // for, fetch the cutoff from the cache (computed once per
-  // (user, mode) per CACHE_TTL_MS — see src/lib/percentile-cache.ts
-  // for the rationale) and apply it in JS to the bbox-bounded rows.
-  // Prior to this, the percentile path computed the cutoff INSIDE
-  // the per-tile query, which scanned the user's full ride_points
-  // each request and pegged the connection pool when /bump-map fired
-  // 16 tiles in parallel.
   let cells: Cell[];
   try {
-    const sql = `
-      SELECT ${cellAggregateExpr}
-      ${sourceFrom}
-        AND rp.latitude  BETWEEN $2 AND $3
-        AND rp.longitude BETWEEN $4 AND $5
-      GROUP BY ix, iy
-    `;
-    const res = await pool.query<Cell>(sql, [
+    const res = await pool.query<Cell>(bboxQuery(rides, mode), [
       session.user.id,
       bbox.south,
       bbox.north,
@@ -143,23 +214,10 @@ export async function GET(
 
     if (percentile !== 'all') {
       const threshold = await getOrComputeThreshold(
-        `user:${session.user.id}:${mode ?? 'mounted'}`,
+        `user:bumpiness:${session.user.id}:${rides}:${mode}`,
         async (client) => {
-          // Compute the (lo, hi) cutoffs across every cell in the
-          // user's gate-filtered dataset. This is the slow query —
-          // but only runs once per (user, mode) per cache window
-          // because the helper memoises it.
           const r = await client.query<{ lo: number | null; hi: number | null }>(
-            `WITH cells AS (
-               SELECT ${cellAggregateExpr}
-               ${sourceFrom}
-               GROUP BY ix, iy
-             ),
-             filtered AS (SELECT * FROM cells WHERE count > 0)
-             SELECT
-               percentile_cont(0.1) WITHIN GROUP (ORDER BY sum / count) AS lo,
-               percentile_cont(0.9) WITHIN GROUP (ORDER BY sum / count) AS hi
-             FROM filtered`,
+            thresholdQuery(rides, mode),
             [session.user.id],
           );
           const row = r.rows[0];

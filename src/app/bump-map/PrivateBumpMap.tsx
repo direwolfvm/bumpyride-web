@@ -4,44 +4,113 @@ import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
-import { type TilePercentile } from '@/lib/tile-mode';
+import {
+  TILE_MODES,
+  TILE_PERCENTILES,
+  type TileMode,
+  type TilePercentile,
+} from '@/lib/tile-mode';
 
-// Three-option filter, mirroring the iOS Bump Map's segmented control.
-//   all      every ride
-//   mounted  pocket_mode IS DISTINCT FROM TRUE  (mounted + legacy null)
-//   pocket   pocket_mode = TRUE
-// Default is `mounted` (matches iOS default).
-type Mode = 'all' | 'mounted' | 'pocket';
-const DEFAULT_MODE: Mode = 'mounted';
+// Personal bump map. Three layers (bumpiness / brakes / close-calls)
+// share the same map; switching is a layer-visibility flip and a
+// URL-template rebind, identical to the public map at /map.
+//
+// Two filter axes mirror the public map (time window, percentile)
+// plus one personal-only axis (rides filter — mounted/pocket/all)
+// that the public map can't expose because it would leak ride mode
+// onto a public aggregate.
 
-// Persisted in localStorage per-browser. Matches iOS's UserDefaults
-// per-device persistence — different browsers / devices keep
-// independent filter states.
-const STORAGE_KEY = 'bumpmap.mode';
+type LayerId = 'bumps' | 'brakes' | 'close-calls';
+type RidesFilter = 'mounted' | 'pocket' | 'all';
 
-function readStoredMode(): Mode {
+const LAYERS: ReadonlyArray<{
+  id: LayerId;
+  label: string;
+  tilesBase: string;
+  attribution: string;
+}> = [
+  {
+    id: 'bumps',
+    label: 'Bumpiness',
+    tilesBase: '/api/tiles/user/{z}/{x}/{y}',
+    attribution: 'Your bump data',
+  },
+  {
+    id: 'brakes',
+    label: 'Hard brakes',
+    tilesBase: '/api/tiles/user/brakes/{z}/{x}/{y}',
+    attribution: 'Your brake events',
+  },
+  {
+    id: 'close-calls',
+    label: 'Close calls',
+    tilesBase: '/api/tiles/user/close-calls/{z}/{x}/{y}',
+    attribution: 'Your close calls',
+  },
+];
+
+const RIDES_LABELS: Record<RidesFilter, string> = {
+  all: 'All',
+  mounted: 'Mounted',
+  pocket: 'Pocket',
+};
+const RIDES_HELP: Record<RidesFilter, string> = {
+  all: 'Every ride you’ve synced regardless of how the phone was carried.',
+  mounted:
+    'Rides where the phone was on a bike mount (plus legacy rides recorded before the mode tag existed). Default — matches the iOS Bump Map.',
+  pocket: 'Rides where the phone was in your pocket / pack / on-body.',
+};
+
+const MODE_LABELS: Record<TileMode, string> = {
+  all: 'All data',
+  '3mo': 'Last 3 months',
+  last10: 'Last 10 observations',
+};
+const MODE_HELP: Record<TileMode, string> = {
+  all: 'Lifetime aggregate. Stable, slow-moving signal.',
+  '3mo':
+    'Only data from the last three months. Recently-patched pavement (or newly-worn) shows up sooner.',
+  last10:
+    'Only the ten most recent observations per cell. Best read on what each cell looks like right now.',
+};
+
+const PERCENTILE_LABELS: Record<TilePercentile, string> = {
+  all: 'All cells',
+  top10: 'Best 10%',
+  bottom10: 'Worst 10%',
+};
+const PERCENTILE_HELP: Record<TilePercentile, string> = {
+  all: 'Every cell you’ve mapped.',
+  top10:
+    'Only the smoothest 10% of bumpiness cells, or the least-incident 10% of brake / close-call cells, against your own dataset.',
+  bottom10:
+    'Only the roughest 10% of bumpiness cells, or the highest-count 10% of brake / close-call cells.',
+};
+
+// localStorage keys. Migrated from the old `bumpmap.mode` key
+// (which used to hold mounted|pocket|all — now the rides axis).
+const STORE_RIDES = 'bumpmap.rides';
+const STORE_LEGACY = 'bumpmap.mode';
+
+function readStoredRides(): RidesFilter {
   try {
-    const v = localStorage.getItem(STORAGE_KEY);
+    const v = localStorage.getItem(STORE_RIDES) ?? localStorage.getItem(STORE_LEGACY);
     if (v === 'all' || v === 'mounted' || v === 'pocket') return v;
   } catch {}
-  return DEFAULT_MODE;
+  return 'mounted';
 }
 
-const TILE_BASE = '/api/tiles/user/{z}/{x}/{y}';
-function tileUrl(m: Mode, p: TilePercentile): string {
-  // The server defaults to mounted too, but pass the param explicitly
-  // either way so the URL is unambiguous in network logs.
-  const params = [`mode=${m}`];
-  if (p !== 'all') params.push(`percentile=${p}`);
-  return `${TILE_BASE}?${params.join('&')}`;
+function tileUrlFor(
+  base: string,
+  rides: RidesFilter,
+  mode: TileMode,
+  percentile: TilePercentile,
+): string {
+  const params: string[] = [`rides=${rides}`];
+  if (mode !== 'all') params.push(`mode=${mode}`);
+  if (percentile !== 'all') params.push(`percentile=${percentile}`);
+  return `${base}?${params.join('&')}`;
 }
-
-const CAPTION: Record<Mode, string> = {
-  all: 'Showing all your synced rides.',
-  mounted:
-    'Showing rides with the phone mounted on the bike (and legacy rides whose mode wasn’t recorded).',
-  pocket: 'Showing rides recorded with the phone in your pocket.',
-};
 
 export function PrivateBumpMap({
   minLat,
@@ -56,26 +125,26 @@ export function PrivateBumpMap({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  // The default in SSR / first paint matches DEFAULT_MODE; we promote
-  // to the user's stored preference on mount.
-  const [mode, setMode] = useState<Mode>(DEFAULT_MODE);
-  // Best/worst-10% percentile filter. Defaults to All cells — the
-  // historical behaviour. Not persisted because it's a transient
-  // "what does my map look like at the extremes" question, not a
-  // long-term preference.
+  const [active, setActive] = useState<LayerId>('bumps');
+  const [rides, setRides] = useState<RidesFilter>('mounted');
+  const [mode, setMode] = useState<TileMode>('all');
   const [percentile, setPercentile] = useState<TilePercentile>('all');
 
+  // SSR-safe rides hydration on mount.
   useEffect(() => {
-    setMode(readStoredMode());
+    setRides(readStoredRides());
   }, []);
 
-  // Mode is read inside the map's `load` callback (which fires after this
-  // effect's sync body returns) — store it on a ref so the callback always
-  // sees the latest value even if the user toggled before load completes.
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
-  const percentileRef = useRef(percentile);
-  percentileRef.current = percentile;
+  // Persist rides changes (the other axes are transient).
+  function selectRides(next: RidesFilter) {
+    setRides(next);
+    try {
+      localStorage.setItem(STORE_RIDES, next);
+      // Don't bother clearing the old key — readStoredRides falls
+      // back to it gracefully and a write to the new key wins on
+      // next read.
+    } catch {}
+  }
 
   useEffect(() => {
     const el = containerRef.current;
@@ -93,78 +162,117 @@ export function PrivateBumpMap({
     mapRef.current = map;
 
     map.on('load', () => {
-      map.addSource('bump', {
-        type: 'raster',
-        tiles: [tileUrl(modeRef.current, percentileRef.current)],
-        tileSize: 256,
-      });
-      map.addLayer({
-        id: 'bump',
-        type: 'raster',
-        source: 'bump',
-        // The tile renderer already bakes per-cell alpha + the purple glow
-        // into the PNG; an extra raster-opacity here would dilute the glow.
-      });
+      for (const l of LAYERS) {
+        map.addSource(l.id, {
+          type: 'raster',
+          tiles: [tileUrlFor(l.tilesBase, rides, mode, percentile)],
+          tileSize: 256,
+          attribution: l.attribution,
+        });
+        map.addLayer({
+          id: l.id,
+          type: 'raster',
+          source: l.id,
+          layout: { visibility: l.id === 'bumps' ? 'visible' : 'none' },
+        });
+      }
     });
 
     return () => {
       mapRef.current = null;
       map.remove();
     };
+    // Initial URL is baked in once; subsequent param changes are
+    // pushed via setTiles below to preserve pan/zoom.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minLat, maxLat, minLon, maxLon]);
 
-  // When the mode/percentile toggle flips, just swap the source's
-  // tile URLs — MapLibre re-fetches visible tiles in place rather
-  // than reflowing the whole map.
+  // Layer-tab visibility toggle.
   useEffect(() => {
-    const src = mapRef.current?.getSource('bump');
-    if (!src) return;
-    (src as maplibregl.RasterTileSource).setTiles([
-      tileUrl(mode, percentile),
-    ]);
-  }, [mode, percentile]);
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      for (const l of LAYERS) {
+        if (!map.getLayer(l.id)) continue;
+        map.setLayoutProperty(
+          l.id,
+          'visibility',
+          l.id === active ? 'visible' : 'none',
+        );
+      }
+    };
+    if (map.isStyleLoaded()) apply();
+    else map.once('load', apply);
+  }, [active]);
 
-  function selectMode(next: Mode) {
-    setMode(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, next);
-    } catch {}
-  }
+  // Rides / mode / percentile changes → retile every layer.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      for (const l of LAYERS) {
+        const src = map.getSource(l.id);
+        if (!src || src.type !== 'raster') continue;
+        (src as maplibregl.RasterTileSource).setTiles([
+          tileUrlFor(l.tilesBase, rides, mode, percentile),
+        ]);
+      }
+    };
+    if (map.isStyleLoaded()) apply();
+    else map.once('load', apply);
+  }, [rides, mode, percentile]);
 
-  const percentileCaption =
-    percentile === 'top10'
-      ? 'Highlighting your smoothest 10% of cells.'
-      : percentile === 'bottom10'
-        ? 'Highlighting your roughest 10% of cells.'
-        : null;
+  // Live caption beneath the tab strips. Whichever axis the user
+  // most recently flipped wins — falls back to the rides filter
+  // when nothing exotic is selected.
+  const caption =
+    percentile !== 'all'
+      ? PERCENTILE_HELP[percentile]
+      : mode !== 'all'
+        ? MODE_HELP[mode]
+        : RIDES_HELP[rides];
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="text-sm text-text-muted">
-          {percentileCaption ?? CAPTION[mode]}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Segmented
-            value={mode}
-            onChange={selectMode}
-            options={[
-              { value: 'all', label: 'All' },
-              { value: 'mounted', label: 'Mounted' },
-              { value: 'pocket', label: 'Pocket' },
-            ]}
-          />
-          <Segmented
-            value={percentile}
-            onChange={setPercentile}
-            options={[
-              { value: 'all', label: 'All cells' },
-              { value: 'top10', label: 'Best 10%' },
-              { value: 'bottom10', label: 'Worst 10%' },
-            ]}
-          />
-        </div>
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <TabStrip
+          ariaLabel="Map layer"
+          values={LAYERS.map((l) => ({ id: l.id, label: l.label, help: '' }))}
+          current={active}
+          onChange={(v) => setActive(v as LayerId)}
+        />
+        <TabStrip
+          ariaLabel="Rides"
+          values={(['mounted', 'pocket', 'all'] as RidesFilter[]).map((r) => ({
+            id: r,
+            label: RIDES_LABELS[r],
+            help: RIDES_HELP[r],
+          }))}
+          current={rides}
+          onChange={(v) => selectRides(v as RidesFilter)}
+        />
+        <TabStrip
+          ariaLabel="View mode"
+          values={TILE_MODES.map((m) => ({
+            id: m,
+            label: MODE_LABELS[m],
+            help: MODE_HELP[m],
+          }))}
+          current={mode}
+          onChange={(v) => setMode(v as TileMode)}
+        />
+        <TabStrip
+          ariaLabel="Percentile"
+          values={TILE_PERCENTILES.map((p) => ({
+            id: p,
+            label: PERCENTILE_LABELS[p],
+            help: PERCENTILE_HELP[p],
+          }))}
+          current={percentile}
+          onChange={(v) => setPercentile(v as TilePercentile)}
+        />
       </div>
+      <p className="mb-3 text-xs text-text-muted">{caption}</p>
       <div
         ref={containerRef}
         className="h-[640px] w-full overflow-hidden rounded-lg border border-border"
@@ -173,36 +281,40 @@ export function PrivateBumpMap({
   );
 }
 
-function Segmented<T extends string>({
-  value,
+function TabStrip({
+  ariaLabel,
+  values,
+  current,
   onChange,
-  options,
 }: {
-  value: T;
-  onChange: (v: T) => void;
-  options: ReadonlyArray<{ value: T; label: string }>;
+  ariaLabel: string;
+  values: ReadonlyArray<{ id: string; label: string; help: string }>;
+  current: string;
+  onChange: (next: string) => void;
 }) {
   return (
     <div
       role="tablist"
-      className="inline-flex rounded-md border border-border bg-surface p-0.5 text-sm"
+      aria-label={ariaLabel}
+      className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
     >
-      {options.map((opt) => {
-        const active = opt.value === value;
+      {values.map((v) => {
+        const isActive = current === v.id;
         return (
           <button
-            key={opt.value}
-            role="tab"
+            key={v.id}
             type="button"
-            aria-selected={active}
-            onClick={() => onChange(opt.value)}
-            className={`rounded px-3 py-1.5 transition ${
-              active
-                ? 'bg-accent-soft text-accent'
-                : 'text-text-muted hover:text-text'
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => onChange(v.id)}
+            title={v.help || undefined}
+            className={`px-3 py-2 text-sm font-medium transition ${
+              isActive
+                ? 'bg-accent-strong text-white'
+                : 'text-text-muted hover:bg-bg hover:text-text'
             }`}
           >
-            {opt.label}
+            {v.label}
           </button>
         );
       })}

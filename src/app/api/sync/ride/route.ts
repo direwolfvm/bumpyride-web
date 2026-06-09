@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 import { pool } from '@/db';
@@ -99,10 +100,15 @@ export async function POST(req: NextRequest) {
   }
   const { userId, shareToPublicMap } = tokenLookup;
 
+  // Read the raw body first so we can hash the exact bytes iOS sent
+  // (matches what the /api/sync/ride/check endpoint will receive
+  // from the client — re-serialising via JSON.parse/stringify would
+  // change key order, whitespace, or float repr and break the check).
+  let rawBody: string;
   let payload: RidePayload;
   try {
-    const raw = await req.json();
-    payload = rideSchema.parse(raw);
+    rawBody = await req.text();
+    payload = rideSchema.parse(JSON.parse(rawBody));
   } catch (err) {
     if (err instanceof ZodError) {
       return NextResponse.json(
@@ -110,11 +116,9 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    return NextResponse.json(
-      { error: 'invalid JSON' },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: 'invalid JSON' }, { status: 400 });
   }
+  const contentHash = createHash('sha256').update(rawBody, 'utf8').digest('hex');
 
   if (new Date(payload.endedAt) < new Date(payload.startedAt)) {
     return NextResponse.json(
@@ -200,6 +204,7 @@ export async function POST(req: NextRequest) {
            distance_m = $8,
            max_bumpiness = $9,
            avg_bumpiness = $10,
+           content_hash = $11,
            updated_at = now()
          WHERE ride_uuid = $1`,
         [
@@ -213,14 +218,16 @@ export async function POST(req: NextRequest) {
           distanceM,
           maxBumpiness,
           avgBumpiness,
+          contentHash,
         ],
       );
     } else {
       await client.query(
         `INSERT INTO rides (
            ride_uuid, user_id, title, started_at, ended_at, pocket_mode,
-           schema_version, point_count, distance_m, max_bumpiness, avg_bumpiness
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+           schema_version, point_count, distance_m, max_bumpiness, avg_bumpiness,
+           content_hash
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [
           payload.id,
           userId,
@@ -233,6 +240,7 @@ export async function POST(req: NextRequest) {
           distanceM,
           maxBumpiness,
           avgBumpiness,
+          contentHash,
         ],
       );
     }

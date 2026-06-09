@@ -170,6 +170,12 @@ export const rides = pgTable(
     avgBumpiness: doublePrecision('avg_bumpiness').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    // SHA-256 of the raw JSON request body at upload time. Drives
+    // the v1.7 H5 sync-checksum optimisation: iOS can ask
+    // /api/sync/ride/check whether the server already has the ride
+    // byte-for-byte and skip the upload if so. Nullable for rides
+    // that pre-date this column.
+    contentHash: text('content_hash'),
     // FALSE until iOS has uploaded a (possibly empty) brakeEvents
     // array for this ride. Distinguishes "detector hasn't run yet"
     // from "ran and found no hard brakes" in the UI.

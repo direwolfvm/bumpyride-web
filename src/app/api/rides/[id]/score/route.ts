@@ -47,6 +47,7 @@ export async function GET(
       total: sql<number>`COALESCE(SUM(${scoreEvents.points}), 0)::int`,
       firstEver: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 10)::int`,
       firstForYou: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 5)::int`,
+      staleRefresh: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 3)::int`,
       repeat: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 1)::int`,
     })
     .from(scoreEvents)
@@ -55,6 +56,7 @@ export async function GET(
   const totalPoints = Number(row?.total ?? 0);
   const firstEver = Number(row?.firstEver ?? 0);
   const firstForYou = Number(row?.firstForYou ?? 0);
+  const staleRefresh = Number(row?.staleRefresh ?? 0);
   const repeat = Number(row?.repeat ?? 0);
 
   // A ride is "eligible" iff at least one score_event exists for it.
@@ -67,7 +69,7 @@ export async function GET(
     {
       rideId: rideUuid,
       totalPoints,
-      breakdown: { firstEver, firstForYou, repeat },
+      breakdown: { firstEver, firstForYou, staleRefresh, repeat },
       eligible,
     },
     { headers: { 'Cache-Control': 'private, no-store' } },

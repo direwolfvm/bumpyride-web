@@ -73,6 +73,7 @@ export default async function RideDetailPage({
         total: sql<number>`COALESCE(SUM(${scoreEvents.points}), 0)::int`,
         firstEver: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 10)::int`,
         firstForYou: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 5)::int`,
+        staleRefresh: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 3)::int`,
         repeat: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 1)::int`,
       })
       .from(scoreEvents)
@@ -82,6 +83,7 @@ export default async function RideDetailPage({
   const rideScoreBreakdown = {
     firstEver: Number(scoreAgg[0]?.firstEver ?? 0),
     firstForYou: Number(scoreAgg[0]?.firstForYou ?? 0),
+    staleRefresh: Number(scoreAgg[0]?.staleRefresh ?? 0),
     repeat: Number(scoreAgg[0]?.repeat ?? 0),
   };
 
@@ -270,7 +272,12 @@ function Stat({
 function ScoreBreakdown({
   breakdown,
 }: {
-  breakdown: { firstEver: number; firstForYou: number; repeat: number };
+  breakdown: {
+    firstEver: number;
+    firstForYou: number;
+    staleRefresh: number;
+    repeat: number;
+  };
 }) {
   const items = [
     {
@@ -286,8 +293,14 @@ function ScoreBreakdown({
       per: 5,
     },
     {
-      label: 'Old cells',
-      hint: 'cells you had mapped before',
+      label: 'Refreshed',
+      hint: 'returned after 10+ days away',
+      count: breakdown.staleRefresh,
+      per: 3,
+    },
+    {
+      label: 'Recent revisits',
+      hint: 'cells you mapped recently',
       count: breakdown.repeat,
       per: 1,
     },

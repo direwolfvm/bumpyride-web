@@ -32,6 +32,7 @@ export default async function ScorePage() {
   const totalPoints = Number(score?.totalPoints ?? 0);
   const firstEver = score?.firstEverCount ?? 0;
   const firstForYou = score?.firstUserCount ?? 0;
+  const staleRefresh = score?.staleRefreshCount ?? 0;
   const repeat = score?.repeatCount ?? 0;
   const { level, nextThreshold, progress } = levelFor(totalPoints);
 
@@ -102,7 +103,7 @@ export default async function ScorePage() {
             )}
           </section>
 
-          <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Breakdown
               label="First ever"
               caption="No one had recorded data in these cells before you."
@@ -118,8 +119,15 @@ export default async function ScorePage() {
               perCell="5 pts"
             />
             <Breakdown
+              label="Stale-refresh"
+              caption="You returned to a cell more than 10 days after your last measurement there."
+              count={staleRefresh}
+              points={staleRefresh * 3}
+              perCell="3 pts"
+            />
+            <Breakdown
               label="Return visits"
-              caption="Rides through cells you'd already mapped."
+              caption="Rides through cells you'd already mapped recently."
               count={repeat}
               points={repeat * 1}
               perCell="1 pt"
@@ -143,8 +151,13 @@ export default async function ScorePage() {
             you&apos;ve recorded in a cell that other riders already had.
           </li>
           <li>
-            <strong className="text-text">1 point</strong> — Every later
-            ride of yours that revisits a cell you&apos;ve mapped before.
+            <strong className="text-text">3 points</strong> — A return
+            visit to one of your cells more than 10 days after your last
+            ride through it. Rewards keeping your coverage fresh.
+          </li>
+          <li>
+            <strong className="text-text">1 point</strong> — A repeat
+            visit within the last 10 days.
           </li>
           <li>
             Only your <strong>mounted-mode</strong> rides count, matching

@@ -19,6 +19,7 @@ export const dynamic = 'force-dynamic';
 //     "breakdown": {
 //       "firstEver":     12,   // count of 10-pt cells
 //       "firstForYou":   84,   // count of 5-pt cells
+//       "staleRefresh":  31,   // count of 3-pt refresh rows
 //       "repeat":        465   // count of 1-pt (ride, cell) rows
 //     },
 //     "level": {
@@ -58,6 +59,7 @@ export async function GET(req: NextRequest) {
   const breakdown = {
     firstEver: score?.firstEverCount ?? 0,
     firstForYou: score?.firstUserCount ?? 0,
+    staleRefresh: score?.staleRefreshCount ?? 0,
     repeat: score?.repeatCount ?? 0,
   };
   const { level, nextThreshold, progress } = levelFor(totalPoints);

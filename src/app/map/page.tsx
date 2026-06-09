@@ -42,65 +42,22 @@ export default async function PublicMapPage() {
 
   return (
     <div className="mx-auto max-w-6xl">
-      <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-        Public map
-      </h1>
-      <p className="mt-2 max-w-3xl text-text-muted">
-        Three views of the same 20 ft cell grid, aggregated across every rider
-        who&apos;s opted in to public sharing — mounted-sensor data only.
-        Switch layers with the first tab strip; switch time windows with the
-        second.
-      </p>
-      <ul className="mt-3 max-w-3xl space-y-1 text-sm text-text-muted">
-        <li>
-          <strong>Bumpiness</strong> — average pavement roughness in g.
-          Continuous heat field colored green → purple.
-        </li>
-        <li>
-          <strong>Hard brakes</strong> — count of iOS-detected braking
-          incidents per cell, colored yellow → purple by frequency.
-        </li>
-        <li>
-          <strong>Close calls</strong> — count of rider-tapped near-miss
-          markers per cell.
-        </li>
-      </ul>
-      <ul className="mt-3 max-w-3xl space-y-1 text-sm text-text-muted">
-        <li>
-          <strong>All data</strong> — the lifetime aggregate. Stable,
-          slow-moving signal.
-        </li>
-        <li>
-          <strong>Last 3 months</strong> — only data recorded in the last
-          three calendar months. Surfaces newly-patched (or newly-worn)
-          pavement and recent incident hotspots.
-        </li>
-        <li>
-          <strong>Last 10 observations</strong> — only the ten most recent
-          samples per cell, regardless of when they were recorded. Best
-          read on what each cell looks like right now.
-        </li>
-      </ul>
-      <p className="mt-3 max-w-3xl text-text-muted">
-        A cell only appears once at least {MIN_PUBLIC_CELL_USERS} distinct
-        riders have contributed to it — so a single rider can&apos;t
-        accidentally publish a route by toggling sharing on. Pocket-mode
-        rides are excluded; legacy rides predating the mode tag are treated
-        as mounted, matching the iOS Bump Map&apos;s default filter. No
-        timestamps, no routes, no per-user attribution.
-      </p>
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+          Public map
+        </h1>
+        {hasData && (
+          <ExportControls
+            endpoint="/api/public-map/export"
+            kindHelp={{
+              raw: 'Per-cell aggregates only. Bumpiness sum + count per cell, brake counts per cell, close-call counts per cell. Per-event records are deliberately omitted — they would compromise the 3-distinct-rider privacy gate.',
+              display: 'Same per-cell numbers, plus average bumpiness and the rendered color bin (yellow → purple) so consumers can reproduce the on-screen color.',
+            }}
+          />
+        )}
+      </div>
 
-      {hasData && (
-        <ExportControls
-          endpoint="/api/public-map/export"
-          kindHelp={{
-            raw: 'Per-cell aggregates only. Bumpiness sum + count per cell, brake counts per cell, close-call counts per cell. Per-event records are deliberately omitted — they would compromise the 3-distinct-rider privacy gate.',
-            display: 'Same per-cell numbers, plus average bumpiness and the rendered color bin (yellow → purple) so consumers can reproduce the on-screen color.',
-          }}
-        />
-      )}
-
-      <div className="mt-6">
+      <div className="mt-4">
         {hasData ? (
           <PublicBumpMap
             minLat={bbox!.minIy! * CELL_LAT_DEG}
@@ -117,7 +74,74 @@ export default async function PublicMapPage() {
         )}
       </div>
 
-      <p className="mt-4 text-xs text-text-dim">
+      {/* Descriptive content moved below the map: new visitors see the
+          data immediately, but the legend is still available for anyone
+          who scrolls down. */}
+      <section className="mt-8 max-w-3xl space-y-4 text-text-muted">
+        <p>
+          Three views of the same 20 ft cell grid, aggregated across every
+          rider who&apos;s opted in to public sharing — mounted-sensor data
+          only. Switch layers with the first tab strip; switch time windows
+          with the second.
+        </p>
+
+        <div>
+          <h2 className="text-sm font-medium uppercase tracking-wide text-text">
+            Layers
+          </h2>
+          <ul className="mt-2 space-y-1 text-sm">
+            <li>
+              <strong className="text-text">Bumpiness</strong> — average
+              pavement roughness in g. Continuous heat field colored green
+              → purple.
+            </li>
+            <li>
+              <strong className="text-text">Hard brakes</strong> — count of
+              iOS-detected braking incidents per cell, colored yellow →
+              purple by frequency.
+            </li>
+            <li>
+              <strong className="text-text">Close calls</strong> — count of
+              rider-tapped near-miss markers per cell.
+            </li>
+          </ul>
+        </div>
+
+        <div>
+          <h2 className="text-sm font-medium uppercase tracking-wide text-text">
+            Time windows
+          </h2>
+          <ul className="mt-2 space-y-1 text-sm">
+            <li>
+              <strong className="text-text">All data</strong> — the
+              lifetime aggregate. Stable, slow-moving signal.
+            </li>
+            <li>
+              <strong className="text-text">Last 3 months</strong> — only
+              data recorded in the last three calendar months. Surfaces
+              newly-patched (or newly-worn) pavement and recent incident
+              hotspots.
+            </li>
+            <li>
+              <strong className="text-text">Last 10 observations</strong>{' '}
+              — only the ten most recent samples per cell, regardless of
+              when they were recorded. Best read on what each cell looks
+              like right now.
+            </li>
+          </ul>
+        </div>
+
+        <p>
+          A cell only appears once at least {MIN_PUBLIC_CELL_USERS} distinct
+          riders have contributed to it — so a single rider can&apos;t
+          accidentally publish a route by toggling sharing on. Pocket-mode
+          rides are excluded; legacy rides predating the mode tag are
+          treated as mounted, matching the iOS Bump Map&apos;s default
+          filter. No timestamps, no routes, no per-user attribution.
+        </p>
+      </section>
+
+      <p className="mt-6 text-xs text-text-dim">
         Basemap © OpenStreetMap contributors © CARTO · Data © consenting
         BumpyRide users
       </p>

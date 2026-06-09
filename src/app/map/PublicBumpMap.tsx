@@ -5,9 +5,13 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
 import {
+  INCIDENT_METRICS,
+  INCIDENT_NORMS,
   TILE_BUMP_AGGS,
   TILE_MODES,
   TILE_PERCENTILES,
+  type IncidentMetric,
+  type IncidentNorm,
   type TileBumpAgg,
   type TileMode,
   type TilePercentile,
@@ -82,21 +86,46 @@ const BUMP_AGG_DESCRIPTIONS: Record<TileBumpAgg, string> = {
   max: 'Worst single sample per cell. Surfaces those rare large hits even where the cell is mostly calm.',
 };
 
+const INCIDENT_METRIC_LABELS: Record<IncidentMetric, string> = {
+  count: 'Count',
+  intensity: 'Intensity',
+};
+const INCIDENT_METRIC_DESCRIPTIONS: Record<IncidentMetric, string> = {
+  count: 'Number of brake events in the cell. Default.',
+  intensity:
+    'Sum of (peak g × duration) over every brake event in the cell. Weights firmer / longer brakes more than light taps.',
+};
+
+const INCIDENT_NORM_LABELS: Record<IncidentNorm, string> = {
+  raw: 'Raw sum',
+  freq: 'Frequency',
+};
+const INCIDENT_NORM_DESCRIPTIONS: Record<IncidentNorm, string> = {
+  raw: 'The raw value for the cell — total events or total intensity. Default.',
+  freq:
+    'Divided by the number of distinct rides that touched the cell. Normalizes for popular streets — a busy corridor with many brakes might read calmer than a quiet street where every rider brakes.',
+};
+
 function tileUrlFor(
+  layerId: LayerId,
   base: string,
   mode: TileMode,
   percentile: TilePercentile,
   agg: TileBumpAgg,
-  isBumps: boolean,
+  metric: IncidentMetric,
+  norm: IncidentNorm,
 ): string {
   const params: string[] = [];
   if (mode !== 'all') params.push(`mode=${mode}`);
   if (percentile !== 'all') params.push(`percentile=${percentile}`);
-  // agg only applies to the bumps layer; don't bake it into brake /
-  // close-call URLs (those routes don't read it, but skipping the
-  // param keeps the URL clean and the tile cache stable for incidents
-  // when the user flips agg).
-  if (isBumps && agg !== 'avg') params.push(`agg=${agg}`);
+  // Each layer only consumes the URL params relevant to it. Skipping
+  // the others keeps the tile cache stable when the user flips a
+  // toggle that doesn't apply to the currently-rendered layer.
+  if (layerId === 'bumps' && agg !== 'avg') params.push(`agg=${agg}`);
+  if (layerId === 'brakes' && metric !== 'count') params.push(`metric=${metric}`);
+  if ((layerId === 'brakes' || layerId === 'close-calls') && norm !== 'raw') {
+    params.push(`norm=${norm}`);
+  }
   return params.length === 0 ? base : `${base}?${params.join('&')}`;
 }
 
@@ -114,6 +143,8 @@ export function PublicBumpMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [active, setActive] = useState<LayerId>('bumps');
+  const [metric, setMetric] = useState<IncidentMetric>('count');
+  const [norm, setNorm] = useState<IncidentNorm>('raw');
   const [mode, setMode] = useState<TileMode>('all');
   const [percentile, setPercentile] = useState<TilePercentile>('all');
   const [bumpAgg, setBumpAgg] = useState<TileBumpAgg>('avg');
@@ -137,7 +168,7 @@ export function PublicBumpMap({
       for (const l of LAYERS) {
         map.addSource(l.id, {
           type: 'raster',
-          tiles: [tileUrlFor(l.tilesBase, mode, percentile, bumpAgg, l.id === 'bumps')],
+          tiles: [tileUrlFor(l.id, l.tilesBase, mode, percentile, bumpAgg, metric, norm)],
           tileSize: 256,
           attribution: l.attribution,
         });
@@ -194,13 +225,13 @@ export function PublicBumpMap({
         if (!src || src.type !== 'raster') continue;
         // setTiles exists on RasterTileSource in maplibre-gl 5.x.
         (src as maplibregl.RasterTileSource).setTiles([
-          tileUrlFor(l.tilesBase, mode, percentile, bumpAgg, l.id === 'bumps'),
+          tileUrlFor(l.id, l.tilesBase, mode, percentile, bumpAgg, metric, norm),
         ]);
       }
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [mode, percentile, bumpAgg]);
+  }, [mode, percentile, bumpAgg, metric, norm]);
 
   return (
     <div>
@@ -310,13 +341,73 @@ export function PublicBumpMap({
             })}
           </div>
         )}
+        {active === 'brakes' && (
+          <div
+            role="tablist"
+            aria-label="Metric"
+            className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
+          >
+            {INCIDENT_METRICS.map((m) => {
+              const isActive = metric === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setMetric(m)}
+                  title={INCIDENT_METRIC_DESCRIPTIONS[m]}
+                  className={`px-3 py-2 text-sm font-medium transition ${
+                    isActive
+                      ? 'bg-accent-strong text-white'
+                      : 'text-text-muted hover:bg-bg hover:text-text'
+                  }`}
+                >
+                  {INCIDENT_METRIC_LABELS[m]}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {(active === 'brakes' || active === 'close-calls') && (
+          <div
+            role="tablist"
+            aria-label="Normalization"
+            className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
+          >
+            {INCIDENT_NORMS.map((n) => {
+              const isActive = norm === n;
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setNorm(n)}
+                  title={INCIDENT_NORM_DESCRIPTIONS[n]}
+                  className={`px-3 py-2 text-sm font-medium transition ${
+                    isActive
+                      ? 'bg-accent-strong text-white'
+                      : 'text-text-muted hover:bg-bg hover:text-text'
+                  }`}
+                >
+                  {INCIDENT_NORM_LABELS[n]}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
       <p className="mb-3 text-xs text-text-muted">
         {active === 'bumps' && bumpAgg !== 'avg'
           ? BUMP_AGG_DESCRIPTIONS[bumpAgg]
-          : percentile === 'all'
-            ? MODE_DESCRIPTIONS[mode]
-            : PERCENTILE_DESCRIPTIONS[percentile]}
+          : active === 'brakes' && metric !== 'count'
+            ? INCIDENT_METRIC_DESCRIPTIONS[metric]
+            : (active === 'brakes' || active === 'close-calls') && norm !== 'raw'
+              ? INCIDENT_NORM_DESCRIPTIONS[norm]
+              : percentile === 'all'
+                ? MODE_DESCRIPTIONS[mode]
+                : PERCENTILE_DESCRIPTIONS[percentile]}
       </p>
       <div
         ref={containerRef}

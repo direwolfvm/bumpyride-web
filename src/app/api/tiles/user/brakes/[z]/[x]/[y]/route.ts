@@ -9,11 +9,20 @@ import {
   tileQueryBbox,
 } from '@/lib/tile-renderer';
 import {
+  parseIncidentMetric,
+  parseIncidentNorm,
   parseTileMode,
   parseTilePercentile,
+  type IncidentMetric,
+  type IncidentNorm,
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
+import {
+  brakeMetricsAgg,
+  incidentValueExpr,
+  INCIDENT_THRESHOLDS,
+} from '@/lib/incident-tiles';
 import {
   parseRidesFilter,
   ridesFilterSql,
@@ -29,13 +38,20 @@ export const dynamic = 'force-dynamic';
 // gate, since these are the user's own brakes.
 //
 // Coverage cells: every cell the user has ride_points in (subject
-// to the ?rides= filter). Renders as count=0 (green) when the user
+// to the ?rides= filter). Renders as value=0 (green) when the user
 // has bump coverage but no brake events in that cell.
 //
-// Brake counts: LEFT-JOINed in, respecting the time-window mode.
+// Brake metrics: LEFT-JOINed in, respecting the time-window mode.
 //
-// Query parameters match the public route, with the additional
-// ?rides=mounted|pocket|all from the personal map.
+// Query parameters:
+//   ?rides=mounted|pocket|all   ride-mode filter; default mounted.
+//   ?mode=all|3mo|last10        time window; default all.
+//   ?percentile=all|top10|bottom10
+//   ?metric=count|intensity     count = events per cell (default);
+//                               intensity = Σ(peak g × duration).
+//   ?norm=raw|freq              raw = displayed value is the metric
+//                               directly; freq = metric ÷ distinct
+//                               rides that touched the cell.
 
 const PNG_HEADERS = {
   'Content-Type': 'image/png',
@@ -45,30 +61,38 @@ const PNG_HEADERS = {
 const NOT_FOUND_TILE = (status = 200) =>
   new Response(new Uint8Array(emptyTilePng()), { status, headers: PNG_HEADERS });
 
-function coverageCte(rides: RidesFilter): string {
-  // Distinct (ix, iy) over the user's ride_points in this bbox,
-  // subject to the rides filter. Uses the ride_points (longitude,
-  // latitude) index added in migration 0011.
+// (ride_uuid, ix, iy) pairs that visited the cell. Grouping by
+// (ix, iy) and counting gives the "distinct rides through cell"
+// denominator the freq normalization needs. For norm=raw we still
+// use it as the coverage source (every cell here gets rendered;
+// brake metrics LEFT-JOIN on top).
+function visitedCte(rides: RidesFilter, withBbox: boolean): string {
+  const bbox = withBbox
+    ? `AND rp.latitude  BETWEEN $2 AND $3
+       AND rp.longitude BETWEEN $4 AND $5`
+    : '';
   return `
     SELECT DISTINCT
+      rp.ride_uuid,
       floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
       floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy
     FROM ride_points rp
     JOIN rides r ON r.ride_uuid = rp.ride_uuid
     WHERE r.user_id = $1
       ${ridesFilterSql(rides)}
-      AND rp.latitude  BETWEEN $2 AND $3
-      AND rp.longitude BETWEEN $4 AND $5
+      ${bbox}
   `;
 }
 
-function brakeCountsCte(rides: RidesFilter, mode: TileMode): string {
+function brakeMetricsCte(rides: RidesFilter, mode: TileMode): string {
   const timeFilter =
     mode === '3mo' ? "AND b.timestamp > now() - interval '3 months'" : '';
   const inner = `
     SELECT
       floor(b.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
       floor(b.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+      b.peak_deceleration_mps2,
+      b.duration_seconds,
       b.timestamp AS ts
     FROM brake_events b
     JOIN rides r ON r.ride_uuid = b.ride_uuid
@@ -80,18 +104,18 @@ function brakeCountsCte(rides: RidesFilter, mode: TileMode): string {
     return `
       WITH event_cells AS (${inner}),
            ranked AS (
-             SELECT ix, iy,
+             SELECT *,
                     row_number() OVER (PARTITION BY ix, iy ORDER BY ts DESC) AS rn
                FROM event_cells
-           )
-      SELECT ix, iy, count(*)::int AS count
-        FROM ranked WHERE rn <= 10
-       GROUP BY ix, iy
+           ),
+           recent AS (SELECT * FROM ranked WHERE rn <= 10)
+      SELECT ix, iy, ${brakeMetricsAgg('recent')}
+        FROM recent GROUP BY ix, iy
     `;
   }
   return `
     WITH event_cells AS (${inner})
-    SELECT ix, iy, count(*)::int AS count
+    SELECT ix, iy, ${brakeMetricsAgg('event_cells')}
       FROM event_cells GROUP BY ix, iy
   `;
 }
@@ -118,40 +142,58 @@ export async function GET(
   const rides: RidesFilter = parseRidesFilter(sp.get('rides'));
   const mode: TileMode = parseTileMode(sp.get('mode'));
   const percentile: TilePercentile = parseTilePercentile(sp.get('percentile'));
+  const metric: IncidentMetric = parseIncidentMetric(sp.get('metric'));
+  const norm: IncidentNorm = parseIncidentNorm(sp.get('norm'));
 
   const bbox = tileQueryBbox(z, x, y);
+  const valueExpr = incidentValueExpr(metric, norm);
 
   let cells: IncidentCell[];
   try {
     const sql = `
-      WITH coverage AS (${coverageCte(rides)}),
-           counts   AS (${brakeCountsCte(rides, mode)})
-      SELECT cov.ix, cov.iy, COALESCE(cnt.count, 0)::int AS count
-        FROM coverage cov
-        LEFT JOIN counts cnt ON cnt.ix = cov.ix AND cnt.iy = cov.iy
+      WITH visited     AS (${visitedCte(rides, true)}),
+           ride_counts AS (
+             SELECT ix, iy, count(*)::int AS rides
+               FROM visited GROUP BY ix, iy
+           ),
+           metrics     AS (${brakeMetricsCte(rides, mode)})
+      SELECT cov.ix, cov.iy, ${valueExpr} AS value
+        FROM ride_counts cov
+        LEFT JOIN metrics m ON m.ix = cov.ix AND m.iy = cov.iy
     `;
-    const res = await pool.query<{ ix: number; iy: number; count: number }>(
+    const res = await pool.query<{ ix: number; iy: number; value: number }>(
       sql,
       [session.user.id, bbox.south, bbox.north, bbox.west, bbox.east],
     );
     cells = res.rows.map((r) => ({
       ix: Number(r.ix),
       iy: Number(r.iy),
-      count: Number(r.count),
+      value: Number(r.value),
     }));
 
     if (percentile !== 'all') {
       const threshold = await getOrComputeThreshold(
-        `user:brakes:${session.user.id}:${rides}:${mode}`,
+        `user:brakes:${session.user.id}:${rides}:${mode}:${metric}:${norm}`,
         async (client) => {
           const r = await client.query<{ lo: number | null; hi: number | null }>(
-            // The counts CTE already lacks a bbox filter — same SQL
-            // for per-tile and threshold paths, just wrapped here.
-            `WITH counts AS (${brakeCountsCte(rides, mode)})
+            // No-bbox version of the same CTE chain. Computes the
+            // 10/90 cutoffs across every cell the user has, scoped
+            // to (rides, mode, metric, norm).
+            `WITH visited     AS (${visitedCte(rides, false)}),
+                  ride_counts AS (
+                    SELECT ix, iy, count(*)::int AS rides
+                      FROM visited GROUP BY ix, iy
+                  ),
+                  metrics     AS (${brakeMetricsCte(rides, mode)}),
+                  values_ AS (
+                    SELECT ${valueExpr} AS value
+                      FROM ride_counts cov
+                      LEFT JOIN metrics m ON m.ix = cov.ix AND m.iy = cov.iy
+                  )
              SELECT
-               percentile_cont(0.1) WITHIN GROUP (ORDER BY count) AS lo,
-               percentile_cont(0.9) WITHIN GROUP (ORDER BY count) AS hi
-             FROM counts`,
+               percentile_cont(0.1) WITHIN GROUP (ORDER BY value) AS lo,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY value) AS hi
+             FROM values_`,
             [session.user.id],
           );
           const row = r.rows[0];
@@ -162,10 +204,10 @@ export async function GET(
         },
       );
       cells = cells.filter((c) => {
-        if (c.count <= 0) return false;
+        if (c.value <= 0) return false;
         return percentile === 'top10'
-          ? c.count <= threshold.lo
-          : c.count >= threshold.hi;
+          ? c.value <= threshold.lo
+          : c.value >= threshold.hi;
       });
     }
   } catch (err) {
@@ -173,8 +215,10 @@ export async function GET(
     return NOT_FOUND_TILE(500);
   }
 
-  return new Response(new Uint8Array(renderIncidentTile(z, x, y, cells)), {
-    status: 200,
-    headers: PNG_HEADERS,
-  });
+  return new Response(
+    new Uint8Array(
+      renderIncidentTile(z, x, y, cells, INCIDENT_THRESHOLDS[metric][norm]),
+    ),
+    { status: 200, headers: PNG_HEADERS },
+  );
 }

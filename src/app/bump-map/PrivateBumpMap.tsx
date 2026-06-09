@@ -5,9 +5,13 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
 import {
+  INCIDENT_METRICS,
+  INCIDENT_NORMS,
   TILE_BUMP_AGGS,
   TILE_MODES,
   TILE_PERCENTILES,
+  type IncidentMetric,
+  type IncidentNorm,
   type TileBumpAgg,
   type TileMode,
   type TilePercentile,
@@ -101,6 +105,26 @@ const BUMP_AGG_HELP: Record<TileBumpAgg, string> = {
   max: 'Worst single sample per cell. Surfaces those rare big hits even where the cell is mostly calm.',
 };
 
+const INCIDENT_METRIC_LABELS: Record<IncidentMetric, string> = {
+  count: 'Count',
+  intensity: 'Intensity',
+};
+const INCIDENT_METRIC_HELP: Record<IncidentMetric, string> = {
+  count: 'Number of brake events in the cell. Default.',
+  intensity:
+    'Sum of (peak g × duration) over every brake event in the cell. Weights firmer / longer brakes more than light taps.',
+};
+
+const INCIDENT_NORM_LABELS: Record<IncidentNorm, string> = {
+  raw: 'Raw sum',
+  freq: 'Frequency',
+};
+const INCIDENT_NORM_HELP: Record<IncidentNorm, string> = {
+  raw: 'The raw value for the cell — total events or total intensity. Default.',
+  freq:
+    'Divided by the number of distinct rides that touched the cell. Normalizes for "how often I ride here" — a hotspot you ride every day reads differently from a hotspot you’ve only ridden once.',
+};
+
 // localStorage keys. Migrated from the old `bumpmap.mode` key
 // (which used to hold mounted|pocket|all — now the rides axis).
 const STORE_RIDES = 'bumpmap.rides';
@@ -115,19 +139,27 @@ function readStoredRides(): RidesFilter {
 }
 
 function tileUrlFor(
+  layerId: LayerId,
   base: string,
   rides: RidesFilter,
   mode: TileMode,
   percentile: TilePercentile,
   agg: TileBumpAgg,
-  isBumps: boolean,
+  metric: IncidentMetric,
+  norm: IncidentNorm,
 ): string {
   const params: string[] = [`rides=${rides}`];
   if (mode !== 'all') params.push(`mode=${mode}`);
   if (percentile !== 'all') params.push(`percentile=${percentile}`);
-  // agg only applies to the bumps layer; skip it on brake / close-call
-  // URLs so their tile cache stays stable when the user flips agg.
-  if (isBumps && agg !== 'avg') params.push(`agg=${agg}`);
+  // Each layer only consumes the URL params relevant to it. Skipping
+  // the others keeps the tile cache stable when the user flips a
+  // toggle that doesn't apply to the currently-rendered layer (e.g.
+  // flipping metric while looking at bumps shouldn't re-fetch tiles).
+  if (layerId === 'bumps' && agg !== 'avg') params.push(`agg=${agg}`);
+  if (layerId === 'brakes' && metric !== 'count') params.push(`metric=${metric}`);
+  if ((layerId === 'brakes' || layerId === 'close-calls') && norm !== 'raw') {
+    params.push(`norm=${norm}`);
+  }
   return `${base}?${params.join('&')}`;
 }
 
@@ -149,6 +181,8 @@ export function PrivateBumpMap({
   const [mode, setMode] = useState<TileMode>('all');
   const [percentile, setPercentile] = useState<TilePercentile>('all');
   const [bumpAgg, setBumpAgg] = useState<TileBumpAgg>('avg');
+  const [metric, setMetric] = useState<IncidentMetric>('count');
+  const [norm, setNorm] = useState<IncidentNorm>('raw');
 
   // SSR-safe rides hydration on mount.
   useEffect(() => {
@@ -185,7 +219,7 @@ export function PrivateBumpMap({
       for (const l of LAYERS) {
         map.addSource(l.id, {
           type: 'raster',
-          tiles: [tileUrlFor(l.tilesBase, rides, mode, percentile, bumpAgg, l.id === 'bumps')],
+          tiles: [tileUrlFor(l.id, l.tilesBase, rides, mode, percentile, bumpAgg, metric, norm)],
           tileSize: 256,
           attribution: l.attribution,
         });
@@ -234,25 +268,29 @@ export function PrivateBumpMap({
         const src = map.getSource(l.id);
         if (!src || src.type !== 'raster') continue;
         (src as maplibregl.RasterTileSource).setTiles([
-          tileUrlFor(l.tilesBase, rides, mode, percentile, bumpAgg, l.id === 'bumps'),
+          tileUrlFor(l.id, l.tilesBase, rides, mode, percentile, bumpAgg, metric, norm),
         ]);
       }
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [rides, mode, percentile, bumpAgg]);
+  }, [rides, mode, percentile, bumpAgg, metric, norm]);
 
-  // Live caption beneath the tab strips. Whichever axis the user
-  // most recently flipped wins — falls back to the rides filter
-  // when nothing exotic is selected.
+  // Live caption beneath the tab strips. Layer-specific axes win
+  // (agg for bumps; metric/norm for incidents); then the global
+  // axes (percentile > mode > rides).
   const caption =
     active === 'bumps' && bumpAgg !== 'avg'
       ? BUMP_AGG_HELP[bumpAgg]
-      : percentile !== 'all'
-        ? PERCENTILE_HELP[percentile]
-        : mode !== 'all'
-          ? MODE_HELP[mode]
-          : RIDES_HELP[rides];
+      : active === 'brakes' && metric !== 'count'
+        ? INCIDENT_METRIC_HELP[metric]
+        : (active === 'brakes' || active === 'close-calls') && norm !== 'raw'
+          ? INCIDENT_NORM_HELP[norm]
+          : percentile !== 'all'
+            ? PERCENTILE_HELP[percentile]
+            : mode !== 'all'
+              ? MODE_HELP[mode]
+              : RIDES_HELP[rides];
 
   return (
     <div>
@@ -303,6 +341,30 @@ export function PrivateBumpMap({
             }))}
             current={bumpAgg}
             onChange={(v) => setBumpAgg(v as TileBumpAgg)}
+          />
+        )}
+        {active === 'brakes' && (
+          <TabStrip
+            ariaLabel="Metric"
+            values={INCIDENT_METRICS.map((m) => ({
+              id: m,
+              label: INCIDENT_METRIC_LABELS[m],
+              help: INCIDENT_METRIC_HELP[m],
+            }))}
+            current={metric}
+            onChange={(v) => setMetric(v as IncidentMetric)}
+          />
+        )}
+        {(active === 'brakes' || active === 'close-calls') && (
+          <TabStrip
+            ariaLabel="Normalization"
+            values={INCIDENT_NORMS.map((n) => ({
+              id: n,
+              label: INCIDENT_NORM_LABELS[n],
+              help: INCIDENT_NORM_HELP[n],
+            }))}
+            current={norm}
+            onChange={(v) => setNorm(v as IncidentNorm)}
           />
         )}
       </div>

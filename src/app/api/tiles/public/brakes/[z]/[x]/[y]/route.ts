@@ -8,11 +8,20 @@ import {
   tileQueryBbox,
 } from '@/lib/tile-renderer';
 import {
+  parseIncidentMetric,
+  parseIncidentNorm,
   parseTileMode,
   parseTilePercentile,
+  type IncidentMetric,
+  type IncidentNorm,
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
+import {
+  brakeMetricsAgg,
+  incidentValueExpr,
+  INCIDENT_THRESHOLDS,
+} from '@/lib/incident-tiles';
 import { getOrComputeThreshold, NO_DATA_THRESHOLD } from '@/lib/percentile-cache';
 
 export const runtime = 'nodejs';
@@ -25,22 +34,23 @@ export const dynamic = 'force-dynamic';
 // gets rendered, so the brake layer is visually complete — you see
 // every cell the bumpiness layer shows, colored by brake activity.
 //
-// Brake counts: LEFT-JOINed in, computed against ONLY brake events
+// Query parameters:
+//   ?mode=all|3mo|last10        time window on brake events.
+//   ?percentile=all|top10|bottom10
+//   ?metric=count|intensity     count (default) or Σ(peak g × duration).
+//   ?norm=raw|freq              raw (default) or value ÷ distinct
+//                               rides that touched the cell.
+//
+// Brake values: LEFT-JOINed in, computed against ONLY brake events
 // whose contributors pass the brake-specific gate. Cells where bump
-// coverage exists but brake events don't pass the gate (e.g. only
-// one rider has braked there) render as count=0 — green tier in the
-// new cells renderer — which keeps single-user brake data from
+// coverage exists but brake events don't pass the gate render as
+// value=0 — green tier — which keeps single-user brake data from
 // leaking via a "1-event" reveal.
 //
-// ?mode=all|3mo|last10 applies to the brake-event time window.
-// Bump coverage is always lifetime (gates from bump_cells), so a
-// brake mode-filter change just re-buckets the colors, never the
-// cell set.
-//
-// ?percentile=all|top10|bottom10 operates on brake-gate-passing
-// cells only (count > 0). With percentile=top10/bottom10 we filter
-// the rendered cells to that bucket — coverage cells with count=0
-// drop out so the rendered set matches the percentile semantics.
+// For norm=freq we replace the cheap bump_cells coverage with a
+// re-aggregation from ride_points so we have the "distinct rides
+// through cell" denominator. Slower, but only paid when the user
+// opts into the freq toggle.
 
 const MIN_PUBLIC_CELL_USERS = Math.max(
   1,
@@ -60,11 +70,10 @@ const PNG_HEADERS = {
 const respondTile = (png: Buffer, status = 200) =>
   new Response(new Uint8Array(png), { status, headers: PNG_HEADERS });
 
-// Bump-coverage cells (privacy-gated bumpiness cells). No bbox here —
-// applied by the outer SELECT. Cheap because bump_cells is indexed
-// and the EXISTS gate uses the contributors PK.
+// Bump-coverage cells (privacy-gated bumpiness cells). Used for the
+// fast norm=raw path. For norm=freq we use the rideCountsCte instead.
 const BUMP_COVERAGE_CTE = `
-  SELECT bc.ix, bc.iy
+  SELECT bc.ix, bc.iy, 1::int AS rides
     FROM bump_cells bc
    WHERE EXISTS (
      SELECT 1
@@ -75,11 +84,39 @@ const BUMP_COVERAGE_CTE = `
    )
 `;
 
-// Brake counts per cell, applying the brake-specific privacy gate
+// Re-aggregated ride counts per cell. Drops the bump_cells fast path
+// in exchange for the "rides through cell" denominator. Same privacy
+// gate as bump_cells (3+ distinct users with sharing-on bumpiness
+// data, or eager).
+const RIDE_COUNTS_CTE = `
+  WITH visited AS (
+    SELECT DISTINCT
+      rp.ride_uuid,
+      floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
+      floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+      r.user_id,
+      u.public_map_eager
+    FROM ride_points rp
+    JOIN rides r ON r.ride_uuid = rp.ride_uuid
+    JOIN users u ON u.id = r.user_id
+    WHERE u.share_to_public_map = TRUE
+      AND r.pocket_mode IS DISTINCT FROM TRUE
+  )
+  SELECT ix, iy, count(*)::int AS rides
+    FROM visited
+   GROUP BY ix, iy
+  HAVING count(DISTINCT user_id) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(public_map_eager)
+`;
+
+function coverageCte(norm: IncidentNorm): string {
+  return norm === 'freq' ? RIDE_COUNTS_CTE : BUMP_COVERAGE_CTE;
+}
+
+// Brake metrics per cell, applying the brake-specific privacy gate
 // and the time-window mode. Cells with no gate-passing brake events
-// don't appear in this CTE — they'll be LEFT-JOINed against the
-// coverage set and surface as count=0.
-function brakeCountsCte(mode: TileMode): string {
+// don't appear in this CTE — they LEFT-JOIN against the coverage set
+// and surface as value=0.
+function brakeMetricsCte(mode: TileMode): string {
   const filter =
     mode === '3mo' ? "AND b.timestamp > now() - interval '3 months'" : '';
   const sourceCte = `
@@ -88,6 +125,8 @@ function brakeCountsCte(mode: TileMode): string {
       floor(b.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
       r.user_id,
       u.public_map_eager,
+      b.peak_deceleration_mps2,
+      b.duration_seconds,
       b.timestamp AS ts
     FROM brake_events b
     JOIN rides r ON r.ride_uuid = b.ride_uuid
@@ -100,20 +139,20 @@ function brakeCountsCte(mode: TileMode): string {
     return `
       WITH event_cells AS (${sourceCte}),
            ranked AS (
-             SELECT ix, iy, user_id, public_map_eager,
+             SELECT *,
                     row_number() OVER (PARTITION BY ix, iy ORDER BY ts DESC) AS rn
                FROM event_cells
-           )
-      SELECT ix, iy, count(*)::int AS count
-        FROM ranked
-       WHERE rn <= 10
+           ),
+           recent AS (SELECT * FROM ranked WHERE rn <= 10)
+      SELECT ix, iy, ${brakeMetricsAgg('recent')}
+        FROM recent
        GROUP BY ix, iy
       HAVING count(DISTINCT user_id) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(public_map_eager)
     `;
   }
   return `
     WITH event_cells AS (${sourceCte})
-    SELECT ix, iy, count(*)::int AS count
+    SELECT ix, iy, ${brakeMetricsAgg('event_cells')}
       FROM event_cells
      GROUP BY ix, iy
     HAVING count(DISTINCT user_id) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(public_map_eager)
@@ -138,6 +177,8 @@ export async function GET(
   const percentile: TilePercentile = parseTilePercentile(
     url.searchParams.get('percentile'),
   );
+  const metric: IncidentMetric = parseIncidentMetric(url.searchParams.get('metric'));
+  const norm: IncidentNorm = parseIncidentNorm(url.searchParams.get('norm'));
   const bbox = tileQueryBbox(z, x, y);
 
   const ixMin = Math.floor(bbox.west / CELL_LON_DEG);
@@ -145,45 +186,50 @@ export async function GET(
   const iyMin = Math.floor(bbox.south / CELL_LAT_DEG);
   const iyMax = Math.floor(bbox.north / CELL_LAT_DEG);
 
+  const valueExpr = incidentValueExpr(metric, norm);
+
   let cells: IncidentCell[];
   try {
-    // Coverage cells in this tile's bbox, with brake counts joined
-    // in. COALESCE the LEFT JOIN to 0 so cells without brake gate
-    // passing surface explicitly as the green "no incidents" tier.
     const bboxSql = `
-      WITH coverage AS (${BUMP_COVERAGE_CTE}),
-           counts   AS (${brakeCountsCte(mode)})
-      SELECT cov.ix, cov.iy, COALESCE(cnt.count, 0)::int AS count
+      WITH coverage AS (${coverageCte(norm)}),
+           metrics  AS (${brakeMetricsCte(mode)})
+      SELECT cov.ix, cov.iy, ${valueExpr} AS value
         FROM coverage cov
-        LEFT JOIN counts cnt ON cnt.ix = cov.ix AND cnt.iy = cov.iy
+        LEFT JOIN metrics m ON m.ix = cov.ix AND m.iy = cov.iy
        WHERE cov.ix BETWEEN $1 AND $2
          AND cov.iy BETWEEN $3 AND $4
     `;
-    const res = await pool.query<{ ix: number; iy: number; count: number }>(
+    const res = await pool.query<{ ix: number; iy: number; value: number }>(
       bboxSql,
       [ixMin, ixMax, iyMin, iyMax],
     );
     cells = res.rows.map((r) => ({
       ix: Number(r.ix),
       iy: Number(r.iy),
-      count: Number(r.count),
+      value: Number(r.value),
     }));
 
     if (percentile !== 'all') {
-      // Percentile thresholds are computed over the BRAKE-gate-passing
-      // cells only (i.e. count > 0) — including all the zero-coverage
-      // cells would swamp the distribution. When the user picks a
-      // percentile bucket, we drop zero-coverage cells from the
-      // render entirely.
+      // Cutoffs are computed over gate-passing cells with a non-zero
+      // metric (i.e., value > 0). Including the zero-coverage cells
+      // would swamp the distribution. Cache key includes every axis
+      // that changes the metric set.
       const threshold = await getOrComputeThreshold(
-        `public:brakes:${mode}`,
+        `public:brakes:${mode}:${metric}:${norm}`,
         async (client) => {
           const r = await client.query<{ lo: number | null; hi: number | null }>(
-            `WITH counts AS (${brakeCountsCte(mode)})
+            `WITH coverage AS (${coverageCte(norm)}),
+                  metrics  AS (${brakeMetricsCte(mode)}),
+                  values_ AS (
+                    SELECT ${valueExpr} AS value
+                      FROM coverage cov
+                      LEFT JOIN metrics m ON m.ix = cov.ix AND m.iy = cov.iy
+                     WHERE m.n IS NOT NULL
+                  )
              SELECT
-               percentile_cont(0.1) WITHIN GROUP (ORDER BY count) AS lo,
-               percentile_cont(0.9) WITHIN GROUP (ORDER BY count) AS hi
-             FROM counts`,
+               percentile_cont(0.1) WITHIN GROUP (ORDER BY value) AS lo,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY value) AS hi
+             FROM values_`,
           );
           const row = r.rows[0];
           if (!row || row.lo == null || row.hi == null) {
@@ -193,10 +239,10 @@ export async function GET(
         },
       );
       cells = cells.filter((c) => {
-        if (c.count <= 0) return false;
+        if (c.value <= 0) return false;
         return percentile === 'top10'
-          ? c.count <= threshold.lo
-          : c.count >= threshold.hi;
+          ? c.value <= threshold.lo
+          : c.value >= threshold.hi;
       });
     }
   } catch (err) {
@@ -204,5 +250,7 @@ export async function GET(
     return respondTile(emptyTilePng(), 500);
   }
 
-  return respondTile(renderIncidentTile(z, x, y, cells));
+  return respondTile(
+    renderIncidentTile(z, x, y, cells, INCIDENT_THRESHOLDS[metric][norm]),
+  );
 }

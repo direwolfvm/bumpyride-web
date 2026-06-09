@@ -39,10 +39,27 @@ export default async function BumpMapPage() {
         Your bump map
       </h1>
       <p className="mt-2 max-w-3xl text-text-muted">
-        Average bumpiness aggregated across every ride you&apos;ve synced.
-        Cells are 20 ft on a side, anchored to the same grid the iOS app uses,
-        so cells match across web and device exactly.
+        Three views of your own 20 ft cell grid — pavement bumpiness, hard
+        brakes, and close calls. Switch layers with the first tab strip;
+        filter by ride mode, time window, and percentile with the others.
+        Cells are anchored to the same grid the iOS app uses, so cells match
+        across web and device exactly.
       </p>
+      <ul className="mt-3 max-w-3xl space-y-1 text-sm text-text-muted">
+        <li>
+          <strong>Bumpiness</strong> — average pavement roughness per cell,
+          with your pocket-mode calibration applied.
+        </li>
+        <li>
+          <strong>Hard brakes</strong> — count of iOS-detected braking
+          incidents per cell. Cells you&apos;ve mapped but never braked in
+          render green.
+        </li>
+        <li>
+          <strong>Close calls</strong> — count of near-miss markers you
+          tapped per cell.
+        </li>
+      </ul>
       {hasData && (
         <ExportControls
           endpoint="/api/me/bump-map/export"

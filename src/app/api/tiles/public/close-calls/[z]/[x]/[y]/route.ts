@@ -8,24 +8,31 @@ import {
   tileQueryBbox,
 } from '@/lib/tile-renderer';
 import {
+  parseIncidentNorm,
   parseTileMode,
   parseTilePercentile,
+  type IncidentNorm,
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
+import { incidentValueExpr, INCIDENT_THRESHOLDS } from '@/lib/incident-tiles';
 import { getOrComputeThreshold, NO_DATA_THRESHOLD } from '@/lib/percentile-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Public close-call tile renderer. Same shape as the brake route:
+// Public close-call tile renderer. Same shape as the brake route but
+// without the metric axis (close-call events don't carry deceleration
+// / duration; only a count). The raw/freq normalization mirrors the
+// brake route exactly.
 //
-//   Coverage cells = bumpiness-gate-passing cells (always lifetime).
-//   Close-call counts LEFT-JOINed in; cells without close-call gate
-//   passing render as count=0 (green tier) so single-user close-call
-//   data isn't leaked.
+// Query parameters:
+//   ?mode=all|3mo|last10        time window on close-call events.
+//   ?percentile=all|top10|bottom10
+//   ?norm=raw|freq              raw (default) or count ÷ distinct
+//                               rides that touched the cell.
 //
-// See ./brakes/.../route.ts for the design rationale.
+// See ./brakes/.../route.ts for design rationale.
 
 const MIN_PUBLIC_CELL_USERS = Math.max(
   1,
@@ -45,8 +52,11 @@ const PNG_HEADERS = {
 const respondTile = (png: Buffer, status = 200) =>
   new Response(new Uint8Array(png), { status, headers: PNG_HEADERS });
 
+// norm=raw: use the cheap bump_cells aggregate; freq=raw: re-aggregate
+// from ride_points so we have a "distinct rides through cell"
+// denominator. Same privacy gate either way.
 const BUMP_COVERAGE_CTE = `
-  SELECT bc.ix, bc.iy
+  SELECT bc.ix, bc.iy, 1::int AS rides
     FROM bump_cells bc
    WHERE EXISTS (
      SELECT 1
@@ -57,7 +67,31 @@ const BUMP_COVERAGE_CTE = `
    )
 `;
 
-function closeCallCountsCte(mode: TileMode): string {
+const RIDE_COUNTS_CTE = `
+  WITH visited AS (
+    SELECT DISTINCT
+      rp.ride_uuid,
+      floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
+      floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy,
+      r.user_id,
+      u.public_map_eager
+    FROM ride_points rp
+    JOIN rides r ON r.ride_uuid = rp.ride_uuid
+    JOIN users u ON u.id = r.user_id
+    WHERE u.share_to_public_map = TRUE
+      AND r.pocket_mode IS DISTINCT FROM TRUE
+  )
+  SELECT ix, iy, count(*)::int AS rides
+    FROM visited
+   GROUP BY ix, iy
+  HAVING count(DISTINCT user_id) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(public_map_eager)
+`;
+
+function coverageCte(norm: IncidentNorm): string {
+  return norm === 'freq' ? RIDE_COUNTS_CTE : BUMP_COVERAGE_CTE;
+}
+
+function closeCallMetricsCte(mode: TileMode): string {
   const filter =
     mode === '3mo' ? "AND c.timestamp > now() - interval '3 months'" : '';
   const sourceCte = `
@@ -82,7 +116,7 @@ function closeCallCountsCte(mode: TileMode): string {
                     row_number() OVER (PARTITION BY ix, iy ORDER BY ts DESC) AS rn
                FROM event_cells
            )
-      SELECT ix, iy, count(*)::int AS count
+      SELECT ix, iy, count(*)::int AS n
         FROM ranked
        WHERE rn <= 10
        GROUP BY ix, iy
@@ -91,7 +125,7 @@ function closeCallCountsCte(mode: TileMode): string {
   }
   return `
     WITH event_cells AS (${sourceCte})
-    SELECT ix, iy, count(*)::int AS count
+    SELECT ix, iy, count(*)::int AS n
       FROM event_cells
      GROUP BY ix, iy
     HAVING count(DISTINCT user_id) >= ${MIN_PUBLIC_CELL_USERS} OR bool_or(public_map_eager)
@@ -116,6 +150,7 @@ export async function GET(
   const percentile: TilePercentile = parseTilePercentile(
     url.searchParams.get('percentile'),
   );
+  const norm: IncidentNorm = parseIncidentNorm(url.searchParams.get('norm'));
   const bbox = tileQueryBbox(z, x, y);
 
   const ixMin = Math.floor(bbox.west / CELL_LON_DEG);
@@ -123,37 +158,46 @@ export async function GET(
   const iyMin = Math.floor(bbox.south / CELL_LAT_DEG);
   const iyMax = Math.floor(bbox.north / CELL_LAT_DEG);
 
+  const valueExpr = incidentValueExpr('count', norm);
+
   let cells: IncidentCell[];
   try {
     const bboxSql = `
-      WITH coverage AS (${BUMP_COVERAGE_CTE}),
-           counts   AS (${closeCallCountsCte(mode)})
-      SELECT cov.ix, cov.iy, COALESCE(cnt.count, 0)::int AS count
+      WITH coverage AS (${coverageCte(norm)}),
+           metrics  AS (${closeCallMetricsCte(mode)})
+      SELECT cov.ix, cov.iy, ${valueExpr} AS value
         FROM coverage cov
-        LEFT JOIN counts cnt ON cnt.ix = cov.ix AND cnt.iy = cov.iy
+        LEFT JOIN metrics m ON m.ix = cov.ix AND m.iy = cov.iy
        WHERE cov.ix BETWEEN $1 AND $2
          AND cov.iy BETWEEN $3 AND $4
     `;
-    const res = await pool.query<{ ix: number; iy: number; count: number }>(
+    const res = await pool.query<{ ix: number; iy: number; value: number }>(
       bboxSql,
       [ixMin, ixMax, iyMin, iyMax],
     );
     cells = res.rows.map((r) => ({
       ix: Number(r.ix),
       iy: Number(r.iy),
-      count: Number(r.count),
+      value: Number(r.value),
     }));
 
     if (percentile !== 'all') {
       const threshold = await getOrComputeThreshold(
-        `public:close-calls:${mode}`,
+        `public:close-calls:${mode}:${norm}`,
         async (client) => {
           const r = await client.query<{ lo: number | null; hi: number | null }>(
-            `WITH counts AS (${closeCallCountsCte(mode)})
+            `WITH coverage AS (${coverageCte(norm)}),
+                  metrics  AS (${closeCallMetricsCte(mode)}),
+                  values_ AS (
+                    SELECT ${valueExpr} AS value
+                      FROM coverage cov
+                      LEFT JOIN metrics m ON m.ix = cov.ix AND m.iy = cov.iy
+                     WHERE m.n IS NOT NULL
+                  )
              SELECT
-               percentile_cont(0.1) WITHIN GROUP (ORDER BY count) AS lo,
-               percentile_cont(0.9) WITHIN GROUP (ORDER BY count) AS hi
-             FROM counts`,
+               percentile_cont(0.1) WITHIN GROUP (ORDER BY value) AS lo,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY value) AS hi
+             FROM values_`,
           );
           const row = r.rows[0];
           if (!row || row.lo == null || row.hi == null) {
@@ -163,10 +207,10 @@ export async function GET(
         },
       );
       cells = cells.filter((c) => {
-        if (c.count <= 0) return false;
+        if (c.value <= 0) return false;
         return percentile === 'top10'
-          ? c.count <= threshold.lo
-          : c.count >= threshold.hi;
+          ? c.value <= threshold.lo
+          : c.value >= threshold.hi;
       });
     }
   } catch (err) {
@@ -174,5 +218,7 @@ export async function GET(
     return respondTile(emptyTilePng(), 500);
   }
 
-  return respondTile(renderIncidentTile(z, x, y, cells));
+  return respondTile(
+    renderIncidentTile(z, x, y, cells, INCIDENT_THRESHOLDS.count[norm]),
+  );
 }

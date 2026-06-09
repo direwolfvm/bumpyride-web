@@ -224,16 +224,38 @@ export function renderTile(
 // cell. Earlier circle-based renders skipped 0-count cells entirely.
 // ---------------------------------------------------------------------------
 
-export type IncidentCell = { ix: number; iy: number; count: number };
+// Generalized incident cell. `value` is whatever the route computed
+// — a raw count, an intensity sum, a per-ride rate. The renderer
+// color-buckets it against a thresholds array that the route picks
+// to match the metric's natural scale.
+export type IncidentCell = { ix: number; iy: number; value: number };
+
+// Default thresholds for raw integer counts — matches the original
+// renderIncidentTile bucket scheme:
+//   value = 0           → green
+//   0  < value < 1      → yellow         (≥1 still falls into yellow)
+//   1 <= value < 2      → yellow
+//   2 <= value < 4      → orange
+//   4 <= value < 6      → red
+//   value >= 6          → purple
+//
+// Thresholds are read as upper bounds for green/yellow/orange/red.
+// Anything above the last threshold is purple. Length must be 4.
+export const INCIDENT_COUNT_THRESHOLDS: readonly number[] = [0, 1, 3, 5];
 
 const INCIDENT_CELL_ALPHA = 0.78;
 
-function incidentColor(count: number): string {
-  if (count >= 6) return `rgba(170, 0, 221, ${INCIDENT_CELL_ALPHA})`;  // purple
-  if (count >= 4) return `rgba(221, 34, 34, ${INCIDENT_CELL_ALPHA})`;  // red
-  if (count >= 2) return `rgba(255, 119, 0, ${INCIDENT_CELL_ALPHA})`;  // orange
-  if (count >= 1) return `rgba(255, 187, 0, ${INCIDENT_CELL_ALPHA})`;  // yellow
-  return `rgba(0, 204, 0, ${INCIDENT_CELL_ALPHA})`;                     // green (count = 0)
+function incidentColor(value: number, thresholds: readonly number[]): string {
+  // 5 buckets, 4 thresholds. value <= t[0] is green; (t[0], t[1]] is
+  // yellow; (t[1], t[2]] is orange; (t[2], t[3]] is red; > t[3] is
+  // purple. The count default [0, 1, 3, 5] preserves the original
+  // behaviour (0 → green; 1 → yellow; 2-3 → orange; 4-5 → red; 6+
+  // → purple).
+  if (value > thresholds[3]) return `rgba(170, 0, 221, ${INCIDENT_CELL_ALPHA})`;  // purple
+  if (value > thresholds[2]) return `rgba(221, 34, 34, ${INCIDENT_CELL_ALPHA})`;  // red
+  if (value > thresholds[1]) return `rgba(255, 119, 0, ${INCIDENT_CELL_ALPHA})`;  // orange
+  if (value > thresholds[0]) return `rgba(255, 187, 0, ${INCIDENT_CELL_ALPHA})`;  // yellow
+  return `rgba(0, 204, 0, ${INCIDENT_CELL_ALPHA})`;                                // green (value = 0)
 }
 
 export function renderIncidentTile(
@@ -241,8 +263,12 @@ export function renderIncidentTile(
   x: number,
   y: number,
   cells: IncidentCell[],
+  thresholds: readonly number[] = INCIDENT_COUNT_THRESHOLDS,
 ): Buffer {
   if (cells.length === 0) return EMPTY_TILE;
+  if (thresholds.length !== 4) {
+    throw new Error(`renderIncidentTile: expected 4 thresholds, got ${thresholds.length}`);
+  }
 
   const canvas = createCanvas(TILE_SIZE, TILE_SIZE);
   const ctx = canvas.getContext('2d');
@@ -250,7 +276,7 @@ export function renderIncidentTile(
   // Same cell-rect layout as the bumpiness renderTile path — keep
   // the 1 px floor for low-zoom so a single sub-pixel cell still
   // shows up rather than getting anti-aliased into invisibility.
-  type Rect = { px: number; py: number; w: number; h: number; count: number };
+  type Rect = { px: number; py: number; w: number; h: number; value: number };
   const rects: Rect[] = [];
   for (const c of cells) {
     const origin = cellOrigin(c.ix, c.iy);
@@ -265,7 +291,7 @@ export function renderIncidentTile(
       py: cy - h / 2,
       w,
       h,
-      count: c.count,
+      value: c.value,
     });
   }
   if (rects.length === 0) return EMPTY_TILE;
@@ -292,7 +318,7 @@ export function renderIncidentTile(
   // the fill (matches renderTile's behaviour).
   for (const r of rects) {
     ctx.clearRect(r.px, r.py, r.w, r.h);
-    ctx.fillStyle = incidentColor(r.count);
+    ctx.fillStyle = incidentColor(r.value, thresholds);
     ctx.fillRect(r.px, r.py, r.w, r.h);
   }
 

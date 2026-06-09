@@ -44,6 +44,46 @@ export function parseTilePercentile(
     : 'all';
 }
 
+// Brake metric. Only the brake layer uses this — close calls don't
+// carry an intensity payload.
+//
+//   count     — number of brake events in the cell. Default.
+//   intensity — SUM(peak g × duration) over every brake event in the
+//               cell. A unit-of-velocity-change-like proxy that
+//               weights firmer / longer brakes more than light taps.
+
+export const INCIDENT_METRICS = ['count', 'intensity'] as const;
+export type IncidentMetric = (typeof INCIDENT_METRICS)[number];
+
+export function parseIncidentMetric(
+  raw: string | null | undefined,
+): IncidentMetric {
+  if (!raw) return 'count';
+  return (INCIDENT_METRICS as readonly string[]).includes(raw)
+    ? (raw as IncidentMetric)
+    : 'count';
+}
+
+// Per-cell normalization for incident layers (brakes + close calls):
+//
+//   raw  — the raw sum (count or intensity). Default — "how many" or
+//          "how hard" total at this cell.
+//   freq — divided by the number of distinct rides that touched the
+//          cell. "How often" — a hotspot you ride every day reads
+//          differently from a hotspot you've only ridden once.
+
+export const INCIDENT_NORMS = ['raw', 'freq'] as const;
+export type IncidentNorm = (typeof INCIDENT_NORMS)[number];
+
+export function parseIncidentNorm(
+  raw: string | null | undefined,
+): IncidentNorm {
+  if (!raw) return 'raw';
+  return (INCIDENT_NORMS as readonly string[]).includes(raw)
+    ? (raw as IncidentNorm)
+    : 'raw';
+}
+
 // Per-cell bumpiness aggregation. Only the bumpiness layer uses this
 // — brakes and close calls are inherently per-event counts.
 //

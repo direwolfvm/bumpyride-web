@@ -1,5 +1,5 @@
 import { notFound, redirect } from 'next/navigation';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, lt, sql } from 'drizzle-orm';
 import Link from 'next/link';
 import { auth } from '@/auth';
 import { db } from '@/db';
@@ -34,7 +34,12 @@ export default async function RideDetailPage({
   });
   if (!ride) notFound();
 
-  const [points, brakeRows, closeCallRows, scoreAgg] = await Promise.all([
+  // Neighbour rides for the prev / next nav strip. "Previous" matches
+  // the rides-list ordering (desc by startedAt): the previous item in
+  // the list is the *newer* ride. "Next" is the older ride. Same
+  // mental model as paginating a list — Next goes to the next page,
+  // which is further into the past.
+  const [points, brakeRows, closeCallRows, scoreAgg, prevRide, nextRide] = await Promise.all([
     db
       .select({
         latitude: ridePoints.latitude,
@@ -78,7 +83,41 @@ export default async function RideDetailPage({
       })
       .from(scoreEvents)
       .where(eq(scoreEvents.rideUuid, rideUuid)),
+    // Newer ride (previous in the rides list = closer to "now").
+    db
+      .select({
+        rideUuid: rides.rideUuid,
+        title: rides.title,
+        startedAt: rides.startedAt,
+      })
+      .from(rides)
+      .where(
+        and(
+          eq(rides.userId, session.user.id),
+          gt(rides.startedAt, ride.startedAt),
+        ),
+      )
+      .orderBy(asc(rides.startedAt))
+      .limit(1),
+    // Older ride (next in the rides list = further into the past).
+    db
+      .select({
+        rideUuid: rides.rideUuid,
+        title: rides.title,
+        startedAt: rides.startedAt,
+      })
+      .from(rides)
+      .where(
+        and(
+          eq(rides.userId, session.user.id),
+          lt(rides.startedAt, ride.startedAt),
+        ),
+      )
+      .orderBy(desc(rides.startedAt))
+      .limit(1),
   ]);
+  const prev = prevRide[0];
+  const next = nextRide[0];
   const ridePointsEarned = Number(scoreAgg[0]?.total ?? 0);
   const rideScoreBreakdown = {
     firstEver: Number(scoreAgg[0]?.firstEver ?? 0),
@@ -140,6 +179,8 @@ export default async function RideDetailPage({
 
   return (
     <div className="mx-auto max-w-5xl">
+      <RideNav prev={prev} next={next} />
+
       <div className="flex flex-wrap items-start justify-between gap-3">
         <RenameForm rideUuid={ride.rideUuid} initialTitle={ride.title} />
         <a
@@ -240,6 +281,82 @@ export default async function RideDetailPage({
         />
       </Section>
     </div>
+  );
+}
+
+// Prev / next ride navigation. Either side may be null when the
+// current ride is the newest or oldest. The empty side renders a
+// disabled stub so the strip stays a stable two-column layout.
+type RideNeighbour = {
+  rideUuid: string;
+  title: string;
+  startedAt: Date;
+};
+function RideNav({
+  prev,
+  next,
+}: {
+  prev: RideNeighbour | undefined;
+  next: RideNeighbour | undefined;
+}) {
+  if (!prev && !next) return null;
+  return (
+    <nav
+      aria-label="Adjacent rides"
+      className="mb-4 grid grid-cols-2 gap-2 text-sm"
+    >
+      <RideNavLink
+        ride={prev}
+        direction="prev"
+        emptyLabel="No newer ride"
+      />
+      <RideNavLink
+        ride={next}
+        direction="next"
+        emptyLabel="No older ride"
+      />
+    </nav>
+  );
+}
+
+function RideNavLink({
+  ride,
+  direction,
+  emptyLabel,
+}: {
+  ride: RideNeighbour | undefined;
+  direction: 'prev' | 'next';
+  emptyLabel: string;
+}) {
+  const isPrev = direction === 'prev';
+  const align = isPrev ? 'text-left' : 'text-right';
+  if (!ride) {
+    return (
+      <div
+        className={`${align} rounded border border-dashed border-border bg-surface px-3 py-2 text-text-dim`}
+      >
+        <div className="text-xs uppercase tracking-wide">
+          {isPrev ? '← Previous' : 'Next →'}
+        </div>
+        <div className="mt-0.5 italic">{emptyLabel}</div>
+      </div>
+    );
+  }
+  return (
+    <Link
+      href={`/rides/${ride.rideUuid}`}
+      className={`${align} rounded border border-border-strong bg-surface px-3 py-2 transition hover:border-accent`}
+    >
+      <div className="text-xs uppercase tracking-wide text-text-muted">
+        {isPrev ? '← Previous (newer)' : 'Next (older) →'}
+      </div>
+      <div className="mt-0.5 truncate font-medium text-text" title={ride.title}>
+        {ride.title}
+      </div>
+      <div className="text-xs text-text-muted">
+        {formatDateTime(ride.startedAt)}
+      </div>
+    </Link>
   );
 }
 

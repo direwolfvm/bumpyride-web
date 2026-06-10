@@ -5,6 +5,13 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
 import {
+  CircleMarkerSwatch,
+  ColorSquareSwatch,
+  HaloSwatch,
+  MapLegend,
+  type LegendItem,
+} from '@/components/MapLegend';
+import {
   INCIDENT_METRICS,
   INCIDENT_NORMS,
   TILE_BUMP_AGGS,
@@ -17,40 +24,33 @@ import {
   type TilePercentile,
 } from '@/lib/tile-mode';
 
-type LayerId = 'bumps' | 'brakes' | 'close-calls';
+// Public bump map. Multi-layer model controlled by a floating
+// legend overlay; tab strips configure each layer's render
+// settings. Mirror of PrivateBumpMap minus the rides filter.
 
-const LAYERS: ReadonlyArray<{
-  id: LayerId;
-  label: string;
-  tilesBase: string;
-  attribution: string;
-}> = [
-  {
-    id: 'bumps',
-    label: 'Bumpiness',
-    tilesBase: '/api/tiles/public/{z}/{x}/{y}',
-    attribution: 'Bump data: consenting BumpyRide users',
-  },
-  {
-    id: 'brakes',
-    label: 'Hard brakes',
-    tilesBase: '/api/tiles/public/brakes/{z}/{x}/{y}',
-    attribution: 'Brake data: consenting BumpyRide users',
-  },
-  {
-    id: 'close-calls',
-    label: 'Close calls',
-    tilesBase: '/api/tiles/public/close-calls/{z}/{x}/{y}',
-    attribution: 'Close-call data: consenting BumpyRide users',
-  },
-];
+type VisibleLayers = {
+  bumps: boolean;
+  brakeCells: boolean;
+  brakeEvents: boolean;
+  closeCells: boolean;
+  closeEvents: boolean;
+  halo: boolean;
+};
+
+const DEFAULT_VISIBLE: VisibleLayers = {
+  bumps: true,
+  brakeCells: false,
+  brakeEvents: false,
+  closeCells: false,
+  closeEvents: false,
+  halo: false,
+};
 
 const MODE_LABELS: Record<TileMode, string> = {
   all: 'All data',
   '3mo': 'Last 3 months',
   last10: 'Last 10 observations',
 };
-
 const MODE_DESCRIPTIONS: Record<TileMode, string> = {
   all: 'Lifetime aggregate. Stable, slow-moving signal.',
   '3mo':
@@ -64,7 +64,6 @@ const PERCENTILE_LABELS: Record<TilePercentile, string> = {
   top10: 'Best 10%',
   bottom10: 'Worst 10%',
 };
-
 const PERCENTILE_DESCRIPTIONS: Record<TilePercentile, string> = {
   all: 'Render every cell that passes the privacy gate.',
   top10:
@@ -78,7 +77,6 @@ const BUMP_AGG_LABELS: Record<TileBumpAgg, string> = {
   median: 'Median',
   max: 'Max',
 };
-
 const BUMP_AGG_DESCRIPTIONS: Record<TileBumpAgg, string> = {
   avg: 'Mean bumpiness across all samples in each cell. Default. Stable signal that downweights one-off spikes.',
   median:
@@ -106,60 +104,74 @@ const INCIDENT_NORM_DESCRIPTIONS: Record<IncidentNorm, string> = {
     'Divided by the number of distinct rides that touched the cell. Normalizes for popular streets — a busy corridor with many brakes might read calmer than a quiet street where every rider brakes.',
 };
 
-// Incident view mode. Both brakes and close-calls can be shown as
-// cell-aggregated heat or as individual event markers. Events are
-// gated by the same privacy rule the raster route uses for counts
-// (≥3 distinct contributors per cell, OR eager).
-type IncidentView = 'cells' | 'events';
-const INCIDENT_VIEWS: readonly IncidentView[] = ['cells', 'events'];
-const INCIDENT_VIEW_LABELS: Record<IncidentView, string> = {
-  cells: 'Cells',
-  events: 'Events',
-};
-const INCIDENT_VIEW_DESCRIPTIONS: Record<IncidentView, string> = {
-  cells: 'Aggregate by 20 ft cell. Default. Privacy-gated by ≥3 contributors per cell.',
-  events:
-    'One marker per event. Only shown in cells that pass the privacy gate. A translucent purple halo of cells passing the bumpiness gate keeps the spatial context.',
-};
+const SRC_BUMPS = 'bumps';
+const SRC_BRAKE_CELLS = 'brake-cells';
+const SRC_CLOSE_CELLS = 'close-call-cells';
+const SRC_BRAKE_EVENTS = 'brake-events';
+const SRC_CLOSE_EVENTS = 'close-call-events';
+const SRC_HALO = 'coverage-halo';
 
-const EVENTS_SOURCE_ID = 'incident-events';
-const EVENTS_LAYER_ID = 'incident-events';
-const COVERAGE_HALO_SOURCE_ID = 'coverage-halo';
-const COVERAGE_HALO_LAYER_ID = 'coverage-halo';
+const BRAKE_MARKER_COLOR = '#dc2626';
+const CLOSE_CALL_MARKER_COLOR = '#f59e0b';
 
-function coverageHaloUrl(mode: TileMode): string {
-  const params: string[] = ['style=halo'];
-  if (mode !== 'all') params.push(`mode=${mode}`);
-  return `/api/tiles/public/{z}/{x}/{y}?${params.join('&')}`;
-}
-
-function eventsEndpointFor(layer: LayerId): string | null {
-  if (layer === 'brakes') return '/api/public/brakes/events';
-  if (layer === 'close-calls') return '/api/public/close-calls/events';
-  return null;
-}
-
-function tileUrlFor(
-  layerId: LayerId,
-  base: string,
+function bumpsTileUrl(
   mode: TileMode,
   percentile: TilePercentile,
   agg: TileBumpAgg,
+  style: 'fill' | 'halo' = 'fill',
+): string {
+  const params: string[] = [];
+  if (mode !== 'all') params.push(`mode=${mode}`);
+  if (percentile !== 'all') params.push(`percentile=${percentile}`);
+  if (agg !== 'avg') params.push(`agg=${agg}`);
+  if (style === 'halo') params.push('style=halo');
+  const base = '/api/tiles/public/{z}/{x}/{y}';
+  return params.length === 0 ? base : `${base}?${params.join('&')}`;
+}
+
+function brakesTileUrl(
+  mode: TileMode,
+  percentile: TilePercentile,
   metric: IncidentMetric,
   norm: IncidentNorm,
 ): string {
   const params: string[] = [];
   if (mode !== 'all') params.push(`mode=${mode}`);
   if (percentile !== 'all') params.push(`percentile=${percentile}`);
-  // Each layer only consumes the URL params relevant to it. Skipping
-  // the others keeps the tile cache stable when the user flips a
-  // toggle that doesn't apply to the currently-rendered layer.
-  if (layerId === 'bumps' && agg !== 'avg') params.push(`agg=${agg}`);
-  if (layerId === 'brakes' && metric !== 'count') params.push(`metric=${metric}`);
-  if ((layerId === 'brakes' || layerId === 'close-calls') && norm !== 'raw') {
-    params.push(`norm=${norm}`);
-  }
+  if (metric !== 'count') params.push(`metric=${metric}`);
+  if (norm !== 'raw') params.push(`norm=${norm}`);
+  const base = '/api/tiles/public/brakes/{z}/{x}/{y}';
   return params.length === 0 ? base : `${base}?${params.join('&')}`;
+}
+
+function closeCallsTileUrl(
+  mode: TileMode,
+  percentile: TilePercentile,
+  norm: IncidentNorm,
+): string {
+  const params: string[] = [];
+  if (mode !== 'all') params.push(`mode=${mode}`);
+  if (percentile !== 'all') params.push(`percentile=${percentile}`);
+  if (norm !== 'raw') params.push(`norm=${norm}`);
+  const base = '/api/tiles/public/close-calls/{z}/{x}/{y}';
+  return params.length === 0 ? base : `${base}?${params.join('&')}`;
+}
+
+function markerPaint(color: string): maplibregl.CircleLayerSpecification['paint'] {
+  return {
+    'circle-radius': [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      10, 3,
+      15, 6,
+      18, 10,
+    ],
+    'circle-color': color,
+    'circle-stroke-color': '#ffffff',
+    'circle-stroke-width': 1.5,
+    'circle-opacity': 0.85,
+  };
 }
 
 export function PublicBumpMap({
@@ -175,15 +187,22 @@ export function PublicBumpMap({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const [active, setActive] = useState<LayerId>('bumps');
-  const [metric, setMetric] = useState<IncidentMetric>('count');
-  const [norm, setNorm] = useState<IncidentNorm>('raw');
+
+  const [visible, setVisible] = useState<VisibleLayers>(DEFAULT_VISIBLE);
   const [mode, setMode] = useState<TileMode>('all');
   const [percentile, setPercentile] = useState<TilePercentile>('all');
   const [bumpAgg, setBumpAgg] = useState<TileBumpAgg>('avg');
-  const [incidentView, setIncidentView] = useState<IncidentView>('cells');
-  const [eventsCount, setEventsCount] = useState<number | null>(null);
-  const [eventsTruncated, setEventsTruncated] = useState(false);
+  const [metric, setMetric] = useState<IncidentMetric>('count');
+  const [norm, setNorm] = useState<IncidentNorm>('raw');
+
+  const [brakeEventsCount, setBrakeEventsCount] = useState<number | null>(null);
+  const [brakeEventsTruncated, setBrakeEventsTruncated] = useState(false);
+  const [closeEventsCount, setCloseEventsCount] = useState<number | null>(null);
+  const [closeEventsTruncated, setCloseEventsTruncated] = useState(false);
+
+  function toggleLayer<K extends keyof VisibleLayers>(key: K) {
+    setVisible((v) => ({ ...v, [key]: !v[key] }));
+  }
 
   useEffect(() => {
     const el = containerRef.current;
@@ -201,64 +220,65 @@ export function PublicBumpMap({
     mapRef.current = map;
 
     map.on('load', () => {
-      for (const l of LAYERS) {
-        map.addSource(l.id, {
-          type: 'raster',
-          tiles: [tileUrlFor(l.id, l.tilesBase, mode, percentile, bumpAgg, metric, norm)],
-          tileSize: 256,
-          attribution: l.attribution,
-        });
-        map.addLayer({
-          id: l.id,
-          type: 'raster',
-          source: l.id,
-          layout: {
-            visibility: l.id === 'bumps' ? 'visible' : 'none',
-          },
-        });
-      }
-      // Coverage halo backdrop — translucent purple halo over every
-      // bumpiness-gate-passing cell. Visible only in events mode so
-      // sparse markers have spatial context.
-      map.addSource(COVERAGE_HALO_SOURCE_ID, {
+      map.addSource(SRC_BUMPS, {
         type: 'raster',
-        tiles: [coverageHaloUrl(mode)],
+        tiles: [bumpsTileUrl(mode, percentile, bumpAgg)],
+        tileSize: 256,
+        attribution: 'Bump data: consenting BumpyRide users',
+      });
+      map.addLayer({ id: SRC_BUMPS, type: 'raster', source: SRC_BUMPS, layout: { visibility: 'visible' } });
+
+      map.addSource(SRC_BRAKE_CELLS, {
+        type: 'raster',
+        tiles: [brakesTileUrl(mode, percentile, metric, norm)],
+        tileSize: 256,
+        attribution: 'Brake data: consenting BumpyRide users',
+      });
+      map.addLayer({ id: SRC_BRAKE_CELLS, type: 'raster', source: SRC_BRAKE_CELLS, layout: { visibility: 'none' } });
+
+      map.addSource(SRC_CLOSE_CELLS, {
+        type: 'raster',
+        tiles: [closeCallsTileUrl(mode, percentile, norm)],
+        tileSize: 256,
+        attribution: 'Close-call data: consenting BumpyRide users',
+      });
+      map.addLayer({ id: SRC_CLOSE_CELLS, type: 'raster', source: SRC_CLOSE_CELLS, layout: { visibility: 'none' } });
+
+      map.addSource(SRC_HALO, {
+        type: 'raster',
+        tiles: [bumpsTileUrl(mode, 'all', 'avg', 'halo')],
         tileSize: 256,
       });
       map.addLayer({
-        id: COVERAGE_HALO_LAYER_ID,
+        id: SRC_HALO,
         type: 'raster',
-        source: COVERAGE_HALO_SOURCE_ID,
+        source: SRC_HALO,
         layout: { visibility: 'none' },
-        // Kept deliberately faint — the backdrop should hint at
-        // coverage without competing with the event markers for
-        // attention.
         paint: { 'raster-opacity': 0.25 },
       });
-      // Events overlay — GeoJSON circle layer on top.
-      map.addSource(EVENTS_SOURCE_ID, {
+
+      map.addSource(SRC_BRAKE_EVENTS, {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
       });
       map.addLayer({
-        id: EVENTS_LAYER_ID,
+        id: SRC_BRAKE_EVENTS,
         type: 'circle',
-        source: EVENTS_SOURCE_ID,
+        source: SRC_BRAKE_EVENTS,
         layout: { visibility: 'none' },
-        paint: {
-          'circle-radius': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            10, 3,
-            15, 6,
-            18, 10,
-          ],
-          'circle-color': '#ff6b6b',
-          'circle-stroke-color': '#ffffff',
-          'circle-stroke-width': 1.5,
-          'circle-opacity': 0.85,
-        },
+        paint: markerPaint(BRAKE_MARKER_COLOR),
+      });
+
+      map.addSource(SRC_CLOSE_EVENTS, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer({
+        id: SRC_CLOSE_EVENTS,
+        type: 'circle',
+        source: SRC_CLOSE_EVENTS,
+        layout: { visibility: 'none' },
+        paint: markerPaint(CLOSE_CALL_MARKER_COLOR),
       });
     });
 
@@ -266,67 +286,237 @@ export function PublicBumpMap({
       mapRef.current = null;
       map.remove();
     };
-    // We intentionally exclude `mode` here — the initial mode is baked
-    // in once at map mount, and subsequent changes are pushed via
-    // setTiles in the next effect. Re-creating the entire map on every
-    // mode flip would wipe the user's pan/zoom state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minLat, maxLat, minLon, maxLon]);
 
-  // Layer-tab visibility toggle. Brakes / close-calls + events mode
-  // swaps the active raster incident layer for the GeoJSON markers
-  // and shows the coverage halo backdrop for context.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const isIncident = active === 'brakes' || active === 'close-calls';
-    const showEvents = isIncident && incidentView === 'events';
     const apply = () => {
-      for (const l of LAYERS) {
-        if (!map.getLayer(l.id)) continue;
-        const shouldShow =
-          l.id === active && !(showEvents && (l.id === 'brakes' || l.id === 'close-calls'));
-        map.setLayoutProperty(
-          l.id,
-          'visibility',
-          shouldShow ? 'visible' : 'none',
-        );
-      }
-      if (map.getLayer(EVENTS_LAYER_ID)) {
-        map.setLayoutProperty(
-          EVENTS_LAYER_ID,
-          'visibility',
-          showEvents ? 'visible' : 'none',
-        );
-      }
-      if (map.getLayer(COVERAGE_HALO_LAYER_ID)) {
-        map.setLayoutProperty(
-          COVERAGE_HALO_LAYER_ID,
-          'visibility',
-          showEvents ? 'visible' : 'none',
-        );
-      }
+      const setVis = (id: string, on: boolean) => {
+        if (map.getLayer(id)) {
+          map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+        }
+      };
+      setVis(SRC_BUMPS, visible.bumps);
+      setVis(SRC_BRAKE_CELLS, visible.brakeCells);
+      setVis(SRC_CLOSE_CELLS, visible.closeCells);
+      setVis(SRC_BRAKE_EVENTS, visible.brakeEvents);
+      setVis(SRC_CLOSE_EVENTS, visible.closeEvents);
+      setVis(SRC_HALO, visible.halo);
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [active, incidentView]);
+  }, [visible]);
 
-  // Incident events fetcher. See PrivateBumpMap for the mirror.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const isIncident = active === 'brakes' || active === 'close-calls';
-    const showEvents = isIncident && incidentView === 'events';
-    const endpoint = showEvents ? eventsEndpointFor(active) : null;
-    if (!endpoint) {
-      setEventsCount(null);
-      setEventsTruncated(false);
+    const apply = () => {
+      const setTiles = (id: string, url: string) => {
+        const src = map.getSource(id);
+        if (src && src.type === 'raster') {
+          (src as maplibregl.RasterTileSource).setTiles([url]);
+        }
+      };
+      setTiles(SRC_BUMPS, bumpsTileUrl(mode, percentile, bumpAgg));
+      setTiles(SRC_BRAKE_CELLS, brakesTileUrl(mode, percentile, metric, norm));
+      setTiles(SRC_CLOSE_CELLS, closeCallsTileUrl(mode, percentile, norm));
+      setTiles(SRC_HALO, bumpsTileUrl(mode, 'all', 'avg', 'halo'));
+    };
+    if (map.isStyleLoaded()) apply();
+    else map.once('load', apply);
+  }, [mode, percentile, bumpAgg, metric, norm]);
+
+  // Events fetchers — independent per source.
+  useEventsFetch({
+    mapRef,
+    sourceId: SRC_BRAKE_EVENTS,
+    endpoint: '/api/public/brakes/events',
+    visible: visible.brakeEvents,
+    mode,
+    setCount: setBrakeEventsCount,
+    setTruncated: setBrakeEventsTruncated,
+  });
+  useEventsFetch({
+    mapRef,
+    sourceId: SRC_CLOSE_EVENTS,
+    endpoint: '/api/public/close-calls/events',
+    visible: visible.closeEvents,
+    mode,
+    setCount: setCloseEventsCount,
+    setTruncated: setCloseEventsTruncated,
+  });
+
+  const captionParts: string[] = [];
+  if (visible.brakeEvents && brakeEventsCount !== null) {
+    captionParts.push(
+      `${brakeEventsCount.toLocaleString()} brake event${brakeEventsCount === 1 ? '' : 's'}${brakeEventsTruncated ? '*' : ''}`,
+    );
+  }
+  if (visible.closeEvents && closeEventsCount !== null) {
+    captionParts.push(
+      `${closeEventsCount.toLocaleString()} close-call${closeEventsCount === 1 ? '' : 's'}${closeEventsTruncated ? '*' : ''}`,
+    );
+  }
+  const eventsCaption = captionParts.length
+    ? `Showing ${captionParts.join(' · ')} in viewport.${brakeEventsTruncated || closeEventsTruncated ? ' * capped — zoom in for the full set.' : ''}`
+    : null;
+  const fallbackCaption =
+    percentile === 'all' ? MODE_DESCRIPTIONS[mode] : PERCENTILE_DESCRIPTIONS[percentile];
+  const caption = eventsCaption ?? fallbackCaption;
+
+  const showBumpAgg = visible.bumps;
+  const showMetric = visible.brakeCells;
+  const showNorm = visible.brakeCells || visible.closeCells;
+
+  const legendItems: ReadonlyArray<LegendItem> = [
+    {
+      id: 'bumps',
+      label: 'Bumpiness',
+      visible: visible.bumps,
+      onToggle: () => toggleLayer('bumps'),
+      swatch: <ColorSquareSwatch from="#00cc00" to="#ff7700" />,
+    },
+    {
+      id: 'brakeCells',
+      label: 'Brake cells',
+      visible: visible.brakeCells,
+      onToggle: () => toggleLayer('brakeCells'),
+      swatch: <ColorSquareSwatch from="#ffbb00" to="#aa00dd" />,
+    },
+    {
+      id: 'brakeEvents',
+      label: 'Brake events',
+      visible: visible.brakeEvents,
+      onToggle: () => toggleLayer('brakeEvents'),
+      swatch: <CircleMarkerSwatch color={BRAKE_MARKER_COLOR} />,
+    },
+    {
+      id: 'closeCells',
+      label: 'Close-call cells',
+      visible: visible.closeCells,
+      onToggle: () => toggleLayer('closeCells'),
+      swatch: <ColorSquareSwatch from="#ffbb00" to="#aa00dd" />,
+    },
+    {
+      id: 'closeEvents',
+      label: 'Close-call events',
+      visible: visible.closeEvents,
+      onToggle: () => toggleLayer('closeEvents'),
+      swatch: <CircleMarkerSwatch color={CLOSE_CALL_MARKER_COLOR} />,
+    },
+    {
+      id: 'halo',
+      label: 'Visited cells',
+      hint: 'halo',
+      visible: visible.halo,
+      onToggle: () => toggleLayer('halo'),
+      swatch: <HaloSwatch />,
+    },
+  ];
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <Strip
+          ariaLabel="View mode"
+          values={TILE_MODES.map((m) => ({
+            id: m,
+            label: MODE_LABELS[m],
+            help: MODE_DESCRIPTIONS[m],
+          }))}
+          current={mode}
+          onChange={(v) => setMode(v as TileMode)}
+        />
+        <Strip
+          ariaLabel="Percentile"
+          values={TILE_PERCENTILES.map((p) => ({
+            id: p,
+            label: PERCENTILE_LABELS[p],
+            help: PERCENTILE_DESCRIPTIONS[p],
+          }))}
+          current={percentile}
+          onChange={(v) => setPercentile(v as TilePercentile)}
+        />
+        {showBumpAgg && (
+          <Strip
+            ariaLabel="Aggregation"
+            values={TILE_BUMP_AGGS.map((a) => ({
+              id: a,
+              label: BUMP_AGG_LABELS[a],
+              help: BUMP_AGG_DESCRIPTIONS[a],
+            }))}
+            current={bumpAgg}
+            onChange={(v) => setBumpAgg(v as TileBumpAgg)}
+          />
+        )}
+        {showMetric && (
+          <Strip
+            ariaLabel="Metric"
+            values={INCIDENT_METRICS.map((m) => ({
+              id: m,
+              label: INCIDENT_METRIC_LABELS[m],
+              help: INCIDENT_METRIC_DESCRIPTIONS[m],
+            }))}
+            current={metric}
+            onChange={(v) => setMetric(v as IncidentMetric)}
+          />
+        )}
+        {showNorm && (
+          <Strip
+            ariaLabel="Normalization"
+            values={INCIDENT_NORMS.map((n) => ({
+              id: n,
+              label: INCIDENT_NORM_LABELS[n],
+              help: INCIDENT_NORM_DESCRIPTIONS[n],
+            }))}
+            current={norm}
+            onChange={(v) => setNorm(v as IncidentNorm)}
+          />
+        )}
+      </div>
+      <p className="mb-3 text-xs text-text-muted">{caption}</p>
+      <div className="relative">
+        <div
+          ref={containerRef}
+          className="h-[640px] w-full overflow-hidden rounded-lg border border-border"
+        />
+        <MapLegend items={legendItems} />
+      </div>
+    </div>
+  );
+}
+
+function useEventsFetch({
+  mapRef,
+  sourceId,
+  endpoint,
+  visible,
+  mode,
+  setCount,
+  setTruncated,
+}: {
+  mapRef: React.MutableRefObject<maplibregl.Map | null>;
+  sourceId: string;
+  endpoint: string;
+  visible: boolean;
+  mode: TileMode;
+  setCount: (n: number | null) => void;
+  setTruncated: (b: boolean) => void;
+}) {
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!visible) {
+      setCount(null);
+      setTruncated(false);
       return;
     }
 
     let cancelled = false;
     async function refresh() {
-      if (!map || !endpoint) return;
+      if (!map) return;
       const b = map.getBounds();
       const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
       const params: string[] = [`bbox=${encodeURIComponent(bbox)}`];
@@ -335,14 +525,14 @@ export function PublicBumpMap({
         const res = await fetch(`${endpoint}?${params.join('&')}`);
         if (cancelled || !res.ok) return;
         const json = (await res.json()) as GeoJSON.FeatureCollection;
-        const src = map.getSource(EVENTS_SOURCE_ID);
+        const src = map.getSource(sourceId);
         if (src && 'setData' in src) {
           (src as maplibregl.GeoJSONSource).setData(json);
         }
-        setEventsCount(json.features.length);
-        setEventsTruncated(res.headers.get('X-Truncated') === 'true');
+        setCount(json.features.length);
+        setTruncated(res.headers.get('X-Truncated') === 'true');
       } catch (err) {
-        if (!cancelled) console.error('public events fetch failed', err);
+        if (!cancelled) console.error(`events fetch failed (${sourceId})`, err);
       }
     }
 
@@ -353,252 +543,46 @@ export function PublicBumpMap({
       cancelled = true;
       map.off('moveend', onMoveEnd);
     };
-  }, [active, incidentView, mode]);
+  }, [mapRef, sourceId, endpoint, visible, mode, setCount, setTruncated]);
+}
 
-  // Mode + percentile + agg toggle. setTiles on each raster source
-  // replaces the URL template and invalidates the source's tile cache,
-  // so the visible layer refetches immediately and the hidden ones
-  // refetch lazily when they're next shown.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const apply = () => {
-      for (const l of LAYERS) {
-        const src = map.getSource(l.id);
-        if (!src || src.type !== 'raster') continue;
-        // setTiles exists on RasterTileSource in maplibre-gl 5.x.
-        (src as maplibregl.RasterTileSource).setTiles([
-          tileUrlFor(l.id, l.tilesBase, mode, percentile, bumpAgg, metric, norm),
-        ]);
-      }
-      const haloSrc = map.getSource(COVERAGE_HALO_SOURCE_ID);
-      if (haloSrc && haloSrc.type === 'raster') {
-        (haloSrc as maplibregl.RasterTileSource).setTiles([coverageHaloUrl(mode)]);
-      }
-    };
-    if (map.isStyleLoaded()) apply();
-    else map.once('load', apply);
-  }, [mode, percentile, bumpAgg, metric, norm]);
-
+function Strip({
+  ariaLabel,
+  values,
+  current,
+  onChange,
+}: {
+  ariaLabel: string;
+  values: ReadonlyArray<{ id: string; label: string; help: string }>;
+  current: string;
+  onChange: (next: string) => void;
+}) {
   return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <div
-          role="tablist"
-          aria-label="Map layer"
-          className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
-        >
-          {LAYERS.map((l) => {
-            const isActive = active === l.id;
-            return (
-              <button
-                key={l.id}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                onClick={() => setActive(l.id)}
-                className={`px-4 py-2 text-sm font-medium transition ${
-                  isActive
-                    ? 'bg-accent-strong text-white'
-                    : 'text-text-muted hover:bg-bg hover:text-text'
-                }`}
-              >
-                {l.label}
-              </button>
-            );
-          })}
-        </div>
-        <div
-          role="tablist"
-          aria-label="View mode"
-          className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
-        >
-          {TILE_MODES.map((m) => {
-            const isActive = mode === m;
-            return (
-              <button
-                key={m}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                onClick={() => setMode(m)}
-                title={MODE_DESCRIPTIONS[m]}
-                className={`px-3 py-2 text-sm font-medium transition ${
-                  isActive
-                    ? 'bg-accent-strong text-white'
-                    : 'text-text-muted hover:bg-bg hover:text-text'
-                }`}
-              >
-                {MODE_LABELS[m]}
-              </button>
-            );
-          })}
-        </div>
-        <div
-          role="tablist"
-          aria-label="Percentile"
-          className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
-        >
-          {TILE_PERCENTILES.map((p) => {
-            const isActive = percentile === p;
-            return (
-              <button
-                key={p}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                onClick={() => setPercentile(p)}
-                title={PERCENTILE_DESCRIPTIONS[p]}
-                className={`px-3 py-2 text-sm font-medium transition ${
-                  isActive
-                    ? 'bg-accent-strong text-white'
-                    : 'text-text-muted hover:bg-bg hover:text-text'
-                }`}
-              >
-                {PERCENTILE_LABELS[p]}
-              </button>
-            );
-          })}
-        </div>
-        {active === 'bumps' && (
-          <div
-            role="tablist"
-            aria-label="Aggregation"
-            className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
+    >
+      {values.map((v) => {
+        const isActive = current === v.id;
+        return (
+          <button
+            key={v.id}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => onChange(v.id)}
+            title={v.help || undefined}
+            className={`px-3 py-2 text-sm font-medium transition ${
+              isActive
+                ? 'bg-accent-strong text-white'
+                : 'text-text-muted hover:bg-bg hover:text-text'
+            }`}
           >
-            {TILE_BUMP_AGGS.map((a) => {
-              const isActive = bumpAgg === a;
-              return (
-                <button
-                  key={a}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  onClick={() => setBumpAgg(a)}
-                  title={BUMP_AGG_DESCRIPTIONS[a]}
-                  className={`px-3 py-2 text-sm font-medium transition ${
-                    isActive
-                      ? 'bg-accent-strong text-white'
-                      : 'text-text-muted hover:bg-bg hover:text-text'
-                  }`}
-                >
-                  {BUMP_AGG_LABELS[a]}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {active === 'brakes' && incidentView === 'cells' && (
-          <div
-            role="tablist"
-            aria-label="Metric"
-            className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
-          >
-            {INCIDENT_METRICS.map((m) => {
-              const isActive = metric === m;
-              return (
-                <button
-                  key={m}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  onClick={() => setMetric(m)}
-                  title={INCIDENT_METRIC_DESCRIPTIONS[m]}
-                  className={`px-3 py-2 text-sm font-medium transition ${
-                    isActive
-                      ? 'bg-accent-strong text-white'
-                      : 'text-text-muted hover:bg-bg hover:text-text'
-                  }`}
-                >
-                  {INCIDENT_METRIC_LABELS[m]}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {/* Normalization applies only to cell-aggregated incident
-            views (both brakes and close-calls). In events mode
-            there's nothing to normalize per-event. */}
-        {(active === 'brakes' || active === 'close-calls') &&
-          incidentView === 'cells' && (
-          <div
-            role="tablist"
-            aria-label="Normalization"
-            className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
-          >
-            {INCIDENT_NORMS.map((n) => {
-              const isActive = norm === n;
-              return (
-                <button
-                  key={n}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  onClick={() => setNorm(n)}
-                  title={INCIDENT_NORM_DESCRIPTIONS[n]}
-                  className={`px-3 py-2 text-sm font-medium transition ${
-                    isActive
-                      ? 'bg-accent-strong text-white'
-                      : 'text-text-muted hover:bg-bg hover:text-text'
-                  }`}
-                >
-                  {INCIDENT_NORM_LABELS[n]}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {(active === 'brakes' || active === 'close-calls') && (
-          <div
-            role="tablist"
-            aria-label="View"
-            className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
-          >
-            {INCIDENT_VIEWS.map((v) => {
-              const isActive = incidentView === v;
-              return (
-                <button
-                  key={v}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  onClick={() => setIncidentView(v)}
-                  title={INCIDENT_VIEW_DESCRIPTIONS[v]}
-                  className={`px-3 py-2 text-sm font-medium transition ${
-                    isActive
-                      ? 'bg-accent-strong text-white'
-                      : 'text-text-muted hover:bg-bg hover:text-text'
-                  }`}
-                >
-                  {INCIDENT_VIEW_LABELS[v]}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-      <p className="mb-3 text-xs text-text-muted">
-        {(active === 'brakes' || active === 'close-calls') &&
-        incidentView === 'events' &&
-        eventsCount !== null
-          ? `Showing ${eventsCount.toLocaleString()} event${eventsCount === 1 ? '' : 's'}${eventsTruncated ? ' (capped — zoom in for full set)' : ''}.`
-          : active === 'bumps' && bumpAgg !== 'avg'
-            ? BUMP_AGG_DESCRIPTIONS[bumpAgg]
-            : (active === 'brakes' || active === 'close-calls') &&
-                incidentView === 'events'
-              ? INCIDENT_VIEW_DESCRIPTIONS.events
-              : active === 'brakes' && metric !== 'count'
-                ? INCIDENT_METRIC_DESCRIPTIONS[metric]
-                : (active === 'brakes' || active === 'close-calls') && norm !== 'raw'
-                  ? INCIDENT_NORM_DESCRIPTIONS[norm]
-                  : percentile === 'all'
-                    ? MODE_DESCRIPTIONS[mode]
-                    : PERCENTILE_DESCRIPTIONS[percentile]}
-      </p>
-      <div
-        ref={containerRef}
-        className="h-[640px] w-full overflow-hidden rounded-lg border border-border"
-      />
+            {v.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

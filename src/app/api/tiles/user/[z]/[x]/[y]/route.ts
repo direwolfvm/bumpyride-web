@@ -246,7 +246,15 @@ export async function GET(
 
   const bbox = tileQueryBbox(z, x, y);
 
-  let cells: Cell[];
+  // ?style=halo strips the colored fill, leaving only the purple
+  // glow halo around every coverage cell. Used by the events-mode
+  // backdrop on the brakes / close-call layers so the user sees
+  // where they've been without the bumpiness color competing with
+  // the event markers.
+  const style = sp.get('style') === 'halo' ? 'halo' : 'fill';
+
+  let coloredCells: Cell[];
+  let haloOnlyCells: ReadonlyArray<{ ix: number; iy: number }> = [];
   try {
     const res = await pool.query<Cell>(bboxQuery(rides, mode, agg), [
       session.user.id,
@@ -255,14 +263,19 @@ export async function GET(
       bbox.west,
       bbox.east,
     ]);
-    cells = res.rows.map((r) => ({
+    const allCells: Cell[] = res.rows.map((r) => ({
       ix: Number(r.ix),
       iy: Number(r.iy),
       sum: Number(r.sum),
       count: Number(r.count),
     }));
 
-    if (percentile !== 'all') {
+    if (style === 'halo') {
+      // No fill, halo-only — render every coverage cell as a glow
+      // backdrop. Skip the percentile / threshold work entirely.
+      coloredCells = [];
+      haloOnlyCells = allCells.filter((c) => c.count > 0);
+    } else if (percentile !== 'all') {
       const threshold = await getOrComputeThreshold(
         `user:bumpiness:${session.user.id}:${rides}:${mode}:${agg}`,
         async (client) => {
@@ -277,19 +290,29 @@ export async function GET(
           return { lo: Number(row.lo), hi: Number(row.hi) };
         },
       );
-      cells = cells.filter((c) => {
-        if (c.count <= 0) return false;
+      // Split into colored (in-bucket) + halo-only (out-of-bucket
+      // but still coverage). Keeping the out-of-bucket halo means
+      // the user keeps spatial context for the broader dataset
+      // while the in-bucket cells stand out.
+      coloredCells = [];
+      const haloOnly: { ix: number; iy: number }[] = [];
+      for (const c of allCells) {
+        if (c.count <= 0) continue;
         const avg = c.sum / c.count;
-        return percentile === 'top10'
-          ? avg <= threshold.lo
-          : avg >= threshold.hi;
-      });
+        const inBucket =
+          percentile === 'top10' ? avg <= threshold.lo : avg >= threshold.hi;
+        if (inBucket) coloredCells.push(c);
+        else haloOnly.push({ ix: c.ix, iy: c.iy });
+      }
+      haloOnlyCells = haloOnly;
+    } else {
+      coloredCells = allCells;
     }
   } catch (err) {
     console.error('user tile query failed', err);
     return NOT_FOUND_TILE(500);
   }
 
-  const png = renderTile(z, x, y, cells);
+  const png = renderTile(z, x, y, coloredCells, haloOnlyCells);
   return new Response(new Uint8Array(png), { status: 200, headers: PNG_HEADERS });
 }

@@ -126,56 +126,27 @@ export function emptyTilePng(): Buffer {
   return EMPTY_TILE;
 }
 
-export function renderTile(
-  z: number,
-  x: number,
-  y: number,
-  cells: Cell[],
-): Buffer {
-  if (cells.length === 0) return EMPTY_TILE;
+// Compute pixel-rect geometry for a cell on this tile. Shared by the
+// fill + halo-only paths so they line up exactly.
+function cellRect(z: number, x: number, y: number, ix: number, iy: number) {
+  const origin = cellOrigin(ix, iy);
+  const tl = lonLatToTilePx(z, x, y, origin.lon, origin.lat + CELL_LAT_DEG);
+  const br = lonLatToTilePx(z, x, y, origin.lon + CELL_LON_DEG, origin.lat);
+  const cx = (tl.x + br.x) / 2;
+  const cy = (tl.y + br.y) / 2;
+  const w = Math.max(1, br.x - tl.x);
+  const h = Math.max(1, br.y - tl.y);
+  return { px: cx - w / 2, py: cy - h / 2, w, h };
+}
 
-  const canvas = createCanvas(TILE_SIZE, TILE_SIZE);
-  const ctx = canvas.getContext('2d');
-
-  // Precompute each cell's pixel rect on this tile. When the natural cell
-  // size falls below 1 px (low zoom), enforce a 1 px floor centred on the
-  // cell's geometric centre — matching iOS — so the rect doesn't drift
-  // toward one corner as zoom changes.
-  type Rect = { px: number; py: number; w: number; h: number; avg: number };
-  const rects: Rect[] = [];
-  for (const c of cells) {
-    if (c.count <= 0) continue;
-    const origin = cellOrigin(c.ix, c.iy);
-    const tl = lonLatToTilePx(
-      z,
-      x,
-      y,
-      origin.lon,
-      origin.lat + CELL_LAT_DEG,
-    );
-    const br = lonLatToTilePx(
-      z,
-      x,
-      y,
-      origin.lon + CELL_LON_DEG,
-      origin.lat,
-    );
-    const cx = (tl.x + br.x) / 2;
-    const cy = (tl.y + br.y) / 2;
-    const w = Math.max(1, br.x - tl.x);
-    const h = Math.max(1, br.y - tl.y);
-    rects.push({
-      px: cx - w / 2,
-      py: cy - h / 2,
-      w,
-      h,
-      avg: c.sum / c.count,
-    });
-  }
-  if (rects.length === 0) return EMPTY_TILE;
-
-  // Pass 1 — glow. Two shadow passes (wide soft aura + tight bright core)
-  // on a single path containing every cell rect, matching the iOS look.
+// Draw the two-pass purple glow over a set of rects on `ctx`. Pulled
+// out so renderTile, renderIncidentTile, and the halo-only paths can
+// share the exact same gradient + blur recipe.
+function drawGlow(
+  ctx: ReturnType<ReturnType<typeof createCanvas>['getContext']>,
+  rects: ReadonlyArray<{ px: number; py: number; w: number; h: number }>,
+): void {
+  if (rects.length === 0) return;
   ctx.save();
   ctx.shadowColor = GLOW_OUTER_COLOR;
   ctx.shadowBlur = GLOW_OUTER_BLUR;
@@ -190,6 +161,41 @@ export function renderTile(
   for (const r of rects) ctx.rect(r.px, r.py, r.w, r.h);
   ctx.fill();
   ctx.restore();
+}
+
+export function renderTile(
+  z: number,
+  x: number,
+  y: number,
+  cells: Cell[],
+  haloOnlyCells: ReadonlyArray<{ ix: number; iy: number }> = [],
+): Buffer {
+  if (cells.length === 0 && haloOnlyCells.length === 0) return EMPTY_TILE;
+
+  const canvas = createCanvas(TILE_SIZE, TILE_SIZE);
+  const ctx = canvas.getContext('2d');
+
+  // Precompute each cell's pixel rect on this tile. When the natural cell
+  // size falls below 1 px (low zoom), enforce a 1 px floor centred on the
+  // cell's geometric centre — matching iOS — so the rect doesn't drift
+  // toward one corner as zoom changes.
+  type Rect = { px: number; py: number; w: number; h: number; avg: number };
+  const rects: Rect[] = [];
+  for (const c of cells) {
+    if (c.count <= 0) continue;
+    const r = cellRect(z, x, y, c.ix, c.iy);
+    rects.push({ ...r, avg: c.sum / c.count });
+  }
+  // Halo-only rects are cells that should get a purple glow halo
+  // but no colored fill — used when the route filters down the
+  // colored set (e.g. percentile bucket) but still wants the user
+  // to see broader coverage as context.
+  const haloRects = haloOnlyCells.map((c) => cellRect(z, x, y, c.ix, c.iy));
+  if (rects.length === 0 && haloRects.length === 0) return EMPTY_TILE;
+
+  // Pass 1 — glow over (colored ∪ halo-only) so both sets get the
+  // purple aura.
+  drawGlow(ctx, [...rects, ...haloRects]);
 
   // Pass 2 — colored cells. clearRect under each footprint first so the
   // halo we just painted under the rect doesn't tint the cell colour, then
@@ -200,6 +206,9 @@ export function renderTile(
     ctx.fillStyle = colorFor(r.avg);
     ctx.fillRect(r.px, r.py, r.w, r.h);
   }
+  // Halo-only cells are intentionally NOT filled — only the glow
+  // pass touches them. So the user sees a purple aura where they
+  // have coverage but no colored data in this view.
 
   return canvas.toBuffer('image/png');
 }
@@ -264,8 +273,9 @@ export function renderIncidentTile(
   y: number,
   cells: IncidentCell[],
   thresholds: readonly number[] = INCIDENT_COUNT_THRESHOLDS,
+  haloOnlyCells: ReadonlyArray<{ ix: number; iy: number }> = [],
 ): Buffer {
-  if (cells.length === 0) return EMPTY_TILE;
+  if (cells.length === 0 && haloOnlyCells.length === 0) return EMPTY_TILE;
   if (thresholds.length !== 4) {
     throw new Error(`renderIncidentTile: expected 4 thresholds, got ${thresholds.length}`);
   }
@@ -277,45 +287,21 @@ export function renderIncidentTile(
   // the 1 px floor for low-zoom so a single sub-pixel cell still
   // shows up rather than getting anti-aliased into invisibility.
   type Rect = { px: number; py: number; w: number; h: number; value: number };
-  const rects: Rect[] = [];
-  for (const c of cells) {
-    const origin = cellOrigin(c.ix, c.iy);
-    const tl = lonLatToTilePx(z, x, y, origin.lon, origin.lat + CELL_LAT_DEG);
-    const br = lonLatToTilePx(z, x, y, origin.lon + CELL_LON_DEG, origin.lat);
-    const cx = (tl.x + br.x) / 2;
-    const cy = (tl.y + br.y) / 2;
-    const w = Math.max(1, br.x - tl.x);
-    const h = Math.max(1, br.y - tl.y);
-    rects.push({
-      px: cx - w / 2,
-      py: cy - h / 2,
-      w,
-      h,
-      value: c.value,
-    });
-  }
-  if (rects.length === 0) return EMPTY_TILE;
+  const rects: Rect[] = cells.map((c) => ({
+    ...cellRect(z, x, y, c.ix, c.iy),
+    value: c.value,
+  }));
+  const haloRects = haloOnlyCells.map((c) => cellRect(z, x, y, c.ix, c.iy));
+  if (rects.length === 0 && haloRects.length === 0) return EMPTY_TILE;
 
-  // Glow pass — identical to renderTile. The purple-glow halo makes
-  // sparse data visible at any zoom and visually ties the incident
-  // layers to the bumpiness layer.
-  ctx.save();
-  ctx.shadowColor = GLOW_OUTER_COLOR;
-  ctx.shadowBlur = GLOW_OUTER_BLUR;
-  ctx.fillStyle = GLOW_OUTER_COLOR;
-  ctx.beginPath();
-  for (const r of rects) ctx.rect(r.px, r.py, r.w, r.h);
-  ctx.fill();
-  ctx.shadowColor = GLOW_INNER_COLOR;
-  ctx.shadowBlur = GLOW_INNER_BLUR;
-  ctx.fillStyle = GLOW_INNER_COLOR;
-  ctx.beginPath();
-  for (const r of rects) ctx.rect(r.px, r.py, r.w, r.h);
-  ctx.fill();
-  ctx.restore();
+  // Glow pass — covers colored cells AND halo-only cells, so the
+  // user sees a purple aura where they have coverage but no colored
+  // data (e.g., percentile-filtered or events-mode backdrop).
+  drawGlow(ctx, [...rects, ...haloRects]);
 
   // Colored-cells pass. clearRect first so the halo doesn't tint
-  // the fill (matches renderTile's behaviour).
+  // the fill (matches renderTile's behaviour). Halo-only cells get
+  // no fill — only the glow underneath.
   for (const r of rects) {
     ctx.clearRect(r.px, r.py, r.w, r.h);
     ctx.fillStyle = incidentColor(r.value, thresholds);

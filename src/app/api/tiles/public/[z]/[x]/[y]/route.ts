@@ -246,30 +246,48 @@ export async function GET(
     url.searchParams.get('percentile'),
   );
   const agg: TileBumpAgg = parseTileBumpAgg(url.searchParams.get('agg'));
+  // ?style=halo strips the colored fill, leaving only the purple
+  // glow halo around every gate-passing cell. Used by the events-
+  // mode backdrop so users see public coverage without the colour
+  // ramp competing with event markers.
+  const style = url.searchParams.get('style') === 'halo' ? 'halo' : 'fill';
   const bbox = tileQueryBbox(z, x, y);
 
-  let cells: Cell[];
+  let coloredCells: Cell[];
+  let haloOnlyCells: ReadonlyArray<{ ix: number; iy: number }> = [];
   try {
     // Fast path: avg + all-mode, served from bump_cells. Every other
     // (mode, agg) re-aggregates ride_points behind the gate.
-    cells = mode === 'all' && agg === 'avg'
+    const allCells = mode === 'all' && agg === 'avg'
       ? await queryAllModeFast(bbox)
       : await queryReaggregated(mode, agg, bbox);
 
-    if (percentile !== 'all') {
+    if (style === 'halo') {
+      coloredCells = [];
+      haloOnlyCells = allCells.filter((c) => c.count > 0);
+    } else if (percentile !== 'all') {
       const threshold = await fetchPercentileThreshold(mode, agg);
-      cells = cells.filter((c) => {
-        if (c.count <= 0) return false;
+      coloredCells = [];
+      const haloOnly: { ix: number; iy: number }[] = [];
+      // Split into in-bucket (colored) and out-of-bucket coverage
+      // (halo only). Keeps spatial context for the broader public
+      // dataset visible.
+      for (const c of allCells) {
+        if (c.count <= 0) continue;
         const avg = c.sum / c.count;
-        return percentile === 'top10'
-          ? avg <= threshold.lo
-          : avg >= threshold.hi;
-      });
+        const inBucket =
+          percentile === 'top10' ? avg <= threshold.lo : avg >= threshold.hi;
+        if (inBucket) coloredCells.push(c);
+        else haloOnly.push({ ix: c.ix, iy: c.iy });
+      }
+      haloOnlyCells = haloOnly;
+    } else {
+      coloredCells = allCells;
     }
   } catch (err) {
     console.error('public tile query failed', err);
     return respondTile(emptyTilePng(), 500);
   }
 
-  return respondTile(renderTile(z, x, y, cells));
+  return respondTile(renderTile(z, x, y, coloredCells, haloOnlyCells));
 }

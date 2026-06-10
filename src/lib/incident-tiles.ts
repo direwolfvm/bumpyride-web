@@ -1,4 +1,5 @@
-import type { IncidentMetric, IncidentNorm } from '@/lib/tile-mode';
+import type { IncidentMetric, IncidentNorm, TilePercentile } from '@/lib/tile-mode';
+import type { IncidentCell } from '@/lib/tile-renderer';
 
 // Shared helpers for the brake + close-call tile routes. Holds the
 // color-bucket thresholds for each (metric, norm) combination and
@@ -59,6 +60,43 @@ export function incidentValueExpr(
 ): string {
   const num = metric === 'intensity' ? 'COALESCE(m.intensity, 0)' : 'COALESCE(m.n, 0)::float8';
   return norm === 'freq' ? `${num} / cov.rides` : num;
+}
+
+// Split a per-cell incident set into (in-bucket colored, out-of-bucket
+// coverage). Used by every incident tile route's percentile path so
+// they all expose the same "halo-on-coverage" UX.
+//
+// Rules:
+//   - value <= 0: never colored; goes to halo-only so the user
+//     sees the bump-coverage cell as context.
+//   - value > 0 AND in bucket: colored with the metric ramp.
+//   - value > 0 AND out of bucket: halo-only.
+//
+// Returns `{ colored, haloOnly }` ready to hand to renderIncidentTile.
+export function splitIncidentCells(
+  allCells: IncidentCell[],
+  percentile: TilePercentile,
+  threshold: { lo: number; hi: number },
+): {
+  colored: IncidentCell[];
+  haloOnly: ReadonlyArray<{ ix: number; iy: number }>;
+} {
+  if (percentile === 'all') return { colored: allCells, haloOnly: [] };
+  const colored: IncidentCell[] = [];
+  const haloOnly: { ix: number; iy: number }[] = [];
+  for (const c of allCells) {
+    if (c.value <= 0) {
+      haloOnly.push({ ix: c.ix, iy: c.iy });
+      continue;
+    }
+    const inBucket =
+      percentile === 'top10'
+        ? c.value <= threshold.lo
+        : c.value >= threshold.hi;
+    if (inBucket) colored.push(c);
+    else haloOnly.push({ ix: c.ix, iy: c.iy });
+  }
+  return { colored, haloOnly };
 }
 
 // SQL fragment that produces (n, intensity) per cell from a source

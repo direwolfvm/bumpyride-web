@@ -15,7 +15,11 @@ import {
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
-import { incidentValueExpr, INCIDENT_THRESHOLDS } from '@/lib/incident-tiles';
+import {
+  incidentValueExpr,
+  INCIDENT_THRESHOLDS,
+  splitIncidentCells,
+} from '@/lib/incident-tiles';
 import { getOrComputeThreshold, NO_DATA_THRESHOLD } from '@/lib/percentile-cache';
 
 export const runtime = 'nodejs';
@@ -161,6 +165,7 @@ export async function GET(
   const valueExpr = incidentValueExpr('count', norm);
 
   let cells: IncidentCell[];
+  let haloOnlyCells: ReadonlyArray<{ ix: number; iy: number }> = [];
   try {
     const bboxSql = `
       WITH coverage AS (${coverageCte(norm)}),
@@ -175,7 +180,7 @@ export async function GET(
       bboxSql,
       [ixMin, ixMax, iyMin, iyMax],
     );
-    cells = res.rows.map((r) => ({
+    const allCells: IncidentCell[] = res.rows.map((r) => ({
       ix: Number(r.ix),
       iy: Number(r.iy),
       value: Number(r.value),
@@ -206,12 +211,11 @@ export async function GET(
           return { lo: Number(row.lo), hi: Number(row.hi) };
         },
       );
-      cells = cells.filter((c) => {
-        if (c.value <= 0) return false;
-        return percentile === 'top10'
-          ? c.value <= threshold.lo
-          : c.value >= threshold.hi;
-      });
+      const split = splitIncidentCells(allCells, percentile, threshold);
+      cells = split.colored;
+      haloOnlyCells = split.haloOnly;
+    } else {
+      cells = allCells;
     }
   } catch (err) {
     console.error('public close-call tile query failed', err);
@@ -219,6 +223,6 @@ export async function GET(
   }
 
   return respondTile(
-    renderIncidentTile(z, x, y, cells, INCIDENT_THRESHOLDS.count[norm]),
+    renderIncidentTile(z, x, y, cells, INCIDENT_THRESHOLDS.count[norm], haloOnlyCells),
   );
 }

@@ -106,23 +106,38 @@ const INCIDENT_NORM_DESCRIPTIONS: Record<IncidentNorm, string> = {
     'Divided by the number of distinct rides that touched the cell. Normalizes for popular streets — a busy corridor with many brakes might read calmer than a quiet street where every rider brakes.',
 };
 
-// Close-call view mode. Same shape as PrivateBumpMap — see notes
-// there. The events endpoint applies the public privacy gate
-// (≥3 distinct close-call contributors per cell, OR eager).
-type CloseCallView = 'cells' | 'events';
-const CLOSE_CALL_VIEWS: readonly CloseCallView[] = ['cells', 'events'];
-const CLOSE_CALL_VIEW_LABELS: Record<CloseCallView, string> = {
+// Incident view mode. Both brakes and close-calls can be shown as
+// cell-aggregated heat or as individual event markers. Events are
+// gated by the same privacy rule the raster route uses for counts
+// (≥3 distinct contributors per cell, OR eager).
+type IncidentView = 'cells' | 'events';
+const INCIDENT_VIEWS: readonly IncidentView[] = ['cells', 'events'];
+const INCIDENT_VIEW_LABELS: Record<IncidentView, string> = {
   cells: 'Cells',
   events: 'Events',
 };
-const CLOSE_CALL_VIEW_DESCRIPTIONS: Record<CloseCallView, string> = {
+const INCIDENT_VIEW_DESCRIPTIONS: Record<IncidentView, string> = {
   cells: 'Aggregate by 20 ft cell. Default. Privacy-gated by ≥3 contributors per cell.',
   events:
-    'One marker per close-call event. Only shown in cells that pass the privacy gate, so an event being visible already implies the cell has ≥3 contributors.',
+    'One marker per event. Only shown in cells that pass the privacy gate. A translucent purple halo of cells passing the bumpiness gate keeps the spatial context.',
 };
 
-const EVENTS_SOURCE_ID = 'close-calls-events';
-const EVENTS_LAYER_ID = 'close-calls-events';
+const EVENTS_SOURCE_ID = 'incident-events';
+const EVENTS_LAYER_ID = 'incident-events';
+const COVERAGE_HALO_SOURCE_ID = 'coverage-halo';
+const COVERAGE_HALO_LAYER_ID = 'coverage-halo';
+
+function coverageHaloUrl(mode: TileMode): string {
+  const params: string[] = ['style=halo'];
+  if (mode !== 'all') params.push(`mode=${mode}`);
+  return `/api/tiles/public/{z}/{x}/{y}?${params.join('&')}`;
+}
+
+function eventsEndpointFor(layer: LayerId): string | null {
+  if (layer === 'brakes') return '/api/public/brakes/events';
+  if (layer === 'close-calls') return '/api/public/close-calls/events';
+  return null;
+}
 
 function tileUrlFor(
   layerId: LayerId,
@@ -166,7 +181,7 @@ export function PublicBumpMap({
   const [mode, setMode] = useState<TileMode>('all');
   const [percentile, setPercentile] = useState<TilePercentile>('all');
   const [bumpAgg, setBumpAgg] = useState<TileBumpAgg>('avg');
-  const [closeCallView, setCloseCallView] = useState<CloseCallView>('cells');
+  const [incidentView, setIncidentView] = useState<IncidentView>('cells');
   const [eventsCount, setEventsCount] = useState<number | null>(null);
   const [eventsTruncated, setEventsTruncated] = useState(false);
 
@@ -202,8 +217,22 @@ export function PublicBumpMap({
           },
         });
       }
-      // Events overlay — GeoJSON source + circle layer. Hidden
-      // until the user picks close-calls + Events view.
+      // Coverage halo backdrop — translucent purple halo over every
+      // bumpiness-gate-passing cell. Visible only in events mode so
+      // sparse markers have spatial context.
+      map.addSource(COVERAGE_HALO_SOURCE_ID, {
+        type: 'raster',
+        tiles: [coverageHaloUrl(mode)],
+        tileSize: 256,
+      });
+      map.addLayer({
+        id: COVERAGE_HALO_LAYER_ID,
+        type: 'raster',
+        source: COVERAGE_HALO_SOURCE_ID,
+        layout: { visibility: 'none' },
+        paint: { 'raster-opacity': 0.65 },
+      });
+      // Events overlay — GeoJSON circle layer on top.
       map.addSource(EVENTS_SOURCE_ID, {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -241,17 +270,19 @@ export function PublicBumpMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minLat, maxLat, minLon, maxLon]);
 
-  // Layer-tab visibility toggle. Close-calls + events mode swaps
-  // the raster close-calls layer for the GeoJSON events overlay.
+  // Layer-tab visibility toggle. Brakes / close-calls + events mode
+  // swaps the active raster incident layer for the GeoJSON markers
+  // and shows the coverage halo backdrop for context.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const showEvents = active === 'close-calls' && closeCallView === 'events';
+    const isIncident = active === 'brakes' || active === 'close-calls';
+    const showEvents = isIncident && incidentView === 'events';
     const apply = () => {
       for (const l of LAYERS) {
         if (!map.getLayer(l.id)) continue;
         const shouldShow =
-          l.id === active && !(l.id === 'close-calls' && showEvents);
+          l.id === active && !(showEvents && (l.id === 'brakes' || l.id === 'close-calls'));
         map.setLayoutProperty(
           l.id,
           'visibility',
@@ -265,17 +296,26 @@ export function PublicBumpMap({
           showEvents ? 'visible' : 'none',
         );
       }
+      if (map.getLayer(COVERAGE_HALO_LAYER_ID)) {
+        map.setLayoutProperty(
+          COVERAGE_HALO_LAYER_ID,
+          'visibility',
+          showEvents ? 'visible' : 'none',
+        );
+      }
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [active, closeCallView]);
+  }, [active, incidentView]);
 
-  // Close-call events fetcher. See PrivateBumpMap for the mirror.
+  // Incident events fetcher. See PrivateBumpMap for the mirror.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const showEvents = active === 'close-calls' && closeCallView === 'events';
-    if (!showEvents) {
+    const isIncident = active === 'brakes' || active === 'close-calls';
+    const showEvents = isIncident && incidentView === 'events';
+    const endpoint = showEvents ? eventsEndpointFor(active) : null;
+    if (!endpoint) {
       setEventsCount(null);
       setEventsTruncated(false);
       return;
@@ -283,13 +323,13 @@ export function PublicBumpMap({
 
     let cancelled = false;
     async function refresh() {
-      if (!map) return;
+      if (!map || !endpoint) return;
       const b = map.getBounds();
       const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
       const params: string[] = [`bbox=${encodeURIComponent(bbox)}`];
       if (mode === '3mo') params.push('mode=3mo');
       try {
-        const res = await fetch(`/api/public/close-calls/events?${params.join('&')}`);
+        const res = await fetch(`${endpoint}?${params.join('&')}`);
         if (cancelled || !res.ok) return;
         const json = (await res.json()) as GeoJSON.FeatureCollection;
         const src = map.getSource(EVENTS_SOURCE_ID);
@@ -310,7 +350,7 @@ export function PublicBumpMap({
       cancelled = true;
       map.off('moveend', onMoveEnd);
     };
-  }, [active, closeCallView, mode]);
+  }, [active, incidentView, mode]);
 
   // Mode + percentile + agg toggle. setTiles on each raster source
   // replaces the URL template and invalidates the source's tile cache,
@@ -327,6 +367,10 @@ export function PublicBumpMap({
         (src as maplibregl.RasterTileSource).setTiles([
           tileUrlFor(l.id, l.tilesBase, mode, percentile, bumpAgg, metric, norm),
         ]);
+      }
+      const haloSrc = map.getSource(COVERAGE_HALO_SOURCE_ID);
+      if (haloSrc && haloSrc.type === 'raster') {
+        (haloSrc as maplibregl.RasterTileSource).setTiles([coverageHaloUrl(mode)]);
       }
     };
     if (map.isStyleLoaded()) apply();
@@ -441,7 +485,7 @@ export function PublicBumpMap({
             })}
           </div>
         )}
-        {active === 'brakes' && (
+        {active === 'brakes' && incidentView === 'cells' && (
           <div
             role="tablist"
             aria-label="Metric"
@@ -469,10 +513,11 @@ export function PublicBumpMap({
             })}
           </div>
         )}
-        {/* Normalization applies to cell-aggregated incident views.
-            On close-calls + events there's nothing to normalize. */}
-        {(active === 'brakes' ||
-          (active === 'close-calls' && closeCallView === 'cells')) && (
+        {/* Normalization applies only to cell-aggregated incident
+            views (both brakes and close-calls). In events mode
+            there's nothing to normalize per-event. */}
+        {(active === 'brakes' || active === 'close-calls') &&
+          incidentView === 'cells' && (
           <div
             role="tablist"
             aria-label="Normalization"
@@ -500,29 +545,29 @@ export function PublicBumpMap({
             })}
           </div>
         )}
-        {active === 'close-calls' && (
+        {(active === 'brakes' || active === 'close-calls') && (
           <div
             role="tablist"
             aria-label="View"
             className="inline-flex overflow-hidden rounded-lg border border-border-strong bg-surface"
           >
-            {CLOSE_CALL_VIEWS.map((v) => {
-              const isActive = closeCallView === v;
+            {INCIDENT_VIEWS.map((v) => {
+              const isActive = incidentView === v;
               return (
                 <button
                   key={v}
                   type="button"
                   role="tab"
                   aria-selected={isActive}
-                  onClick={() => setCloseCallView(v)}
-                  title={CLOSE_CALL_VIEW_DESCRIPTIONS[v]}
+                  onClick={() => setIncidentView(v)}
+                  title={INCIDENT_VIEW_DESCRIPTIONS[v]}
                   className={`px-3 py-2 text-sm font-medium transition ${
                     isActive
                       ? 'bg-accent-strong text-white'
                       : 'text-text-muted hover:bg-bg hover:text-text'
                   }`}
                 >
-                  {CLOSE_CALL_VIEW_LABELS[v]}
+                  {INCIDENT_VIEW_LABELS[v]}
                 </button>
               );
             })}
@@ -530,14 +575,17 @@ export function PublicBumpMap({
         )}
       </div>
       <p className="mb-3 text-xs text-text-muted">
-        {active === 'close-calls' && closeCallView === 'events' && eventsCount !== null
+        {(active === 'brakes' || active === 'close-calls') &&
+        incidentView === 'events' &&
+        eventsCount !== null
           ? `Showing ${eventsCount.toLocaleString()} event${eventsCount === 1 ? '' : 's'}${eventsTruncated ? ' (capped — zoom in for full set)' : ''}.`
           : active === 'bumps' && bumpAgg !== 'avg'
             ? BUMP_AGG_DESCRIPTIONS[bumpAgg]
-            : active === 'brakes' && metric !== 'count'
-              ? INCIDENT_METRIC_DESCRIPTIONS[metric]
-              : active === 'close-calls' && closeCallView === 'events'
-                ? CLOSE_CALL_VIEW_DESCRIPTIONS.events
+            : (active === 'brakes' || active === 'close-calls') &&
+                incidentView === 'events'
+              ? INCIDENT_VIEW_DESCRIPTIONS.events
+              : active === 'brakes' && metric !== 'count'
+                ? INCIDENT_METRIC_DESCRIPTIONS[metric]
                 : (active === 'brakes' || active === 'close-calls') && norm !== 'raw'
                   ? INCIDENT_NORM_DESCRIPTIONS[norm]
                   : percentile === 'all'

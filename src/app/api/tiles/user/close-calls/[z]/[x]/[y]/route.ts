@@ -16,7 +16,11 @@ import {
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
-import { incidentValueExpr, INCIDENT_THRESHOLDS } from '@/lib/incident-tiles';
+import {
+  incidentValueExpr,
+  INCIDENT_THRESHOLDS,
+  splitIncidentCells,
+} from '@/lib/incident-tiles';
 import {
   parseRidesFilter,
   ridesFilterSql,
@@ -130,6 +134,7 @@ export async function GET(
   const valueExpr = incidentValueExpr('count', norm);
 
   let cells: IncidentCell[];
+  let haloOnlyCells: ReadonlyArray<{ ix: number; iy: number }> = [];
   try {
     const sql = `
       WITH visited     AS (${visitedCte(rides, true)}),
@@ -146,7 +151,7 @@ export async function GET(
       sql,
       [session.user.id, bbox.south, bbox.north, bbox.west, bbox.east],
     );
-    cells = res.rows.map((r) => ({
+    const allCells: IncidentCell[] = res.rows.map((r) => ({
       ix: Number(r.ix),
       iy: Number(r.iy),
       value: Number(r.value),
@@ -181,12 +186,11 @@ export async function GET(
           return { lo: Number(row.lo), hi: Number(row.hi) };
         },
       );
-      cells = cells.filter((c) => {
-        if (c.value <= 0) return false;
-        return percentile === 'top10'
-          ? c.value <= threshold.lo
-          : c.value >= threshold.hi;
-      });
+      const split = splitIncidentCells(allCells, percentile, threshold);
+      cells = split.colored;
+      haloOnlyCells = split.haloOnly;
+    } else {
+      cells = allCells;
     }
   } catch (err) {
     console.error('user close-call tile query failed', err);
@@ -195,7 +199,7 @@ export async function GET(
 
   return new Response(
     new Uint8Array(
-      renderIncidentTile(z, x, y, cells, INCIDENT_THRESHOLDS.count[norm]),
+      renderIncidentTile(z, x, y, cells, INCIDENT_THRESHOLDS.count[norm], haloOnlyCells),
     ),
     { status: 200, headers: PNG_HEADERS },
   );

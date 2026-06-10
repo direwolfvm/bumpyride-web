@@ -292,7 +292,10 @@ export function PrivateBumpMap({
         type: 'raster',
         source: COVERAGE_HALO_SOURCE_ID,
         layout: { visibility: 'none' },
-        paint: { 'raster-opacity': 0.65 },
+        // Kept deliberately faint — the backdrop should hint at
+        // "where you've been" without competing with the event
+        // markers for attention.
+        paint: { 'raster-opacity': 0.25 },
       });
       // Events overlay — GeoJSON circle layer on top so the markers
       // sit above the halo backdrop. Hidden until the user picks

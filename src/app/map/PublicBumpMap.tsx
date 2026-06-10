@@ -230,7 +230,10 @@ export function PublicBumpMap({
         type: 'raster',
         source: COVERAGE_HALO_SOURCE_ID,
         layout: { visibility: 'none' },
-        paint: { 'raster-opacity': 0.65 },
+        // Kept deliberately faint — the backdrop should hint at
+        // coverage without competing with the event markers for
+        // attention.
+        paint: { 'raster-opacity': 0.25 },
       });
       // Events overlay — GeoJSON circle layer on top.
       map.addSource(EVENTS_SOURCE_ID, {

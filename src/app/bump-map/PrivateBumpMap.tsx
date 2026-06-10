@@ -5,6 +5,13 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
 import {
+  CircleMarkerSwatch,
+  ColorSquareSwatch,
+  HaloSwatch,
+  MapLegend,
+  type LegendItem,
+} from '@/components/MapLegend';
+import {
   INCIDENT_METRICS,
   INCIDENT_NORMS,
   TILE_BUMP_AGGS,
@@ -17,43 +24,32 @@ import {
   type TilePercentile,
 } from '@/lib/tile-mode';
 
-// Personal bump map. Three layers (bumpiness / brakes / close-calls)
-// share the same map; switching is a layer-visibility flip and a
-// URL-template rebind, identical to the public map at /map.
-//
-// Two filter axes mirror the public map (time window, percentile)
-// plus one personal-only axis (rides filter — mounted/pocket/all)
-// that the public map can't expose because it would leak ride mode
-// onto a public aggregate.
+// Personal bump map. Multi-layer model — any combination of layers
+// can be visible simultaneously, controlled by a floating legend
+// overlay. The tab strips configure each layer's render settings
+// (aggregation, metric, normalization, etc).
 
-type LayerId = 'bumps' | 'brakes' | 'close-calls';
 type RidesFilter = 'mounted' | 'pocket' | 'all';
 
-const LAYERS: ReadonlyArray<{
-  id: LayerId;
-  label: string;
-  tilesBase: string;
-  attribution: string;
-}> = [
-  {
-    id: 'bumps',
-    label: 'Bumpiness',
-    tilesBase: '/api/tiles/user/{z}/{x}/{y}',
-    attribution: 'Your bump data',
-  },
-  {
-    id: 'brakes',
-    label: 'Hard brakes',
-    tilesBase: '/api/tiles/user/brakes/{z}/{x}/{y}',
-    attribution: 'Your brake events',
-  },
-  {
-    id: 'close-calls',
-    label: 'Close calls',
-    tilesBase: '/api/tiles/user/close-calls/{z}/{x}/{y}',
-    attribution: 'Your close calls',
-  },
-];
+// Visibility flags for every layer the map renders. Independent
+// checkboxes in the legend toggle these.
+type VisibleLayers = {
+  bumps: boolean;
+  brakeCells: boolean;
+  brakeEvents: boolean;
+  closeCells: boolean;
+  closeEvents: boolean;
+  halo: boolean;
+};
+
+const DEFAULT_VISIBLE: VisibleLayers = {
+  bumps: true,
+  brakeCells: false,
+  brakeEvents: false,
+  closeCells: false,
+  closeEvents: false,
+  halo: false,
+};
 
 const RIDES_LABELS: Record<RidesFilter, string> = {
   all: 'All',
@@ -125,51 +121,13 @@ const INCIDENT_NORM_HELP: Record<IncidentNorm, string> = {
     'Divided by the number of distinct rides that touched the cell. Normalizes for "how often I ride here" — a hotspot you ride every day reads differently from a hotspot you’ve only ridden once.',
 };
 
-// Incident view mode. Both the brakes and close-call layers can be
-// shown as cell-aggregated heat or as one marker per event. Bumps
-// don't have an events view (bumpiness is continuous, not eventy).
-type IncidentView = 'cells' | 'events';
-const INCIDENT_VIEWS: readonly IncidentView[] = ['cells', 'events'];
-const INCIDENT_VIEW_LABELS: Record<IncidentView, string> = {
-  cells: 'Cells',
-  events: 'Events',
-};
-const INCIDENT_VIEW_HELP: Record<IncidentView, string> = {
-  cells: 'Aggregate by 20 ft cell — every cell with bump coverage renders, color-coded by incident activity. Default.',
-  events:
-    'One marker per event. Best for seeing exactly where each incident happened. Fetched live for the current viewport. A translucent purple halo of every cell you have visited keeps the spatial context.',
-};
-
-// MapLibre source + layer IDs for the events GeoJSON layer. Shared
-// between brake and close-call events — the data swaps in when the
-// user switches active layer, the source itself stays.
-const EVENTS_SOURCE_ID = 'incident-events';
-const EVENTS_LAYER_ID = 'incident-events';
-// Translucent purple halo layer showing every cell the user has
-// visited. Backdrop for events mode so users keep spatial context.
-// Implemented as a raster layer driven by the personal bumpiness
-// route with ?style=halo (no colored fill).
-const COVERAGE_HALO_SOURCE_ID = 'coverage-halo';
-const COVERAGE_HALO_LAYER_ID = 'coverage-halo';
-
-// Build the coverage-halo URL: the personal bumpiness tile route in
-// halo-only mode, scoped to the same rides + time-window axes the
-// user picked elsewhere.
-function coverageHaloUrl(rides: RidesFilter, mode: TileMode): string {
-  const params: string[] = [`rides=${rides}`, 'style=halo'];
-  if (mode !== 'all') params.push(`mode=${mode}`);
-  return `/api/tiles/user/{z}/{x}/{y}?${params.join('&')}`;
-}
-
-// Pick the personal events endpoint based on the active incident
-// layer. The shape (FeatureCollection of Points) is identical;
-// brake features carry extra peakG / durationSeconds properties
-// in case we want intensity-scaled markers later.
-function eventsEndpointFor(layer: LayerId): string | null {
-  if (layer === 'brakes') return '/api/me/brakes/events';
-  if (layer === 'close-calls') return '/api/me/close-calls/events';
-  return null;
-}
+// MapLibre source + layer IDs. One per renderable item.
+const SRC_BUMPS = 'bumps';
+const SRC_BRAKE_CELLS = 'brake-cells';
+const SRC_CLOSE_CELLS = 'close-call-cells';
+const SRC_BRAKE_EVENTS = 'brake-events';
+const SRC_CLOSE_EVENTS = 'close-call-events';
+const SRC_HALO = 'coverage-halo';
 
 // localStorage keys. Migrated from the old `bumpmap.mode` key
 // (which used to hold mounted|pocket|all — now the rides axis).
@@ -184,29 +142,73 @@ function readStoredRides(): RidesFilter {
   return 'mounted';
 }
 
-function tileUrlFor(
-  layerId: LayerId,
-  base: string,
+// Build the bumpiness raster URL. Default is fill-style; pass
+// style='halo' for the halo-only backdrop.
+function bumpsTileUrl(
   rides: RidesFilter,
   mode: TileMode,
   percentile: TilePercentile,
   agg: TileBumpAgg,
+  style: 'fill' | 'halo' = 'fill',
+): string {
+  const params: string[] = [`rides=${rides}`];
+  if (mode !== 'all') params.push(`mode=${mode}`);
+  if (percentile !== 'all') params.push(`percentile=${percentile}`);
+  if (agg !== 'avg') params.push(`agg=${agg}`);
+  if (style === 'halo') params.push('style=halo');
+  return `/api/tiles/user/{z}/{x}/{y}?${params.join('&')}`;
+}
+
+function brakesTileUrl(
+  rides: RidesFilter,
+  mode: TileMode,
+  percentile: TilePercentile,
   metric: IncidentMetric,
   norm: IncidentNorm,
 ): string {
   const params: string[] = [`rides=${rides}`];
   if (mode !== 'all') params.push(`mode=${mode}`);
   if (percentile !== 'all') params.push(`percentile=${percentile}`);
-  // Each layer only consumes the URL params relevant to it. Skipping
-  // the others keeps the tile cache stable when the user flips a
-  // toggle that doesn't apply to the currently-rendered layer (e.g.
-  // flipping metric while looking at bumps shouldn't re-fetch tiles).
-  if (layerId === 'bumps' && agg !== 'avg') params.push(`agg=${agg}`);
-  if (layerId === 'brakes' && metric !== 'count') params.push(`metric=${metric}`);
-  if ((layerId === 'brakes' || layerId === 'close-calls') && norm !== 'raw') {
-    params.push(`norm=${norm}`);
-  }
-  return `${base}?${params.join('&')}`;
+  if (metric !== 'count') params.push(`metric=${metric}`);
+  if (norm !== 'raw') params.push(`norm=${norm}`);
+  return `/api/tiles/user/brakes/{z}/{x}/{y}?${params.join('&')}`;
+}
+
+function closeCallsTileUrl(
+  rides: RidesFilter,
+  mode: TileMode,
+  percentile: TilePercentile,
+  norm: IncidentNorm,
+): string {
+  const params: string[] = [`rides=${rides}`];
+  if (mode !== 'all') params.push(`mode=${mode}`);
+  if (percentile !== 'all') params.push(`percentile=${percentile}`);
+  if (norm !== 'raw') params.push(`norm=${norm}`);
+  return `/api/tiles/user/close-calls/{z}/{x}/{y}?${params.join('&')}`;
+}
+
+// Marker palette for the two event types. Brakes are deep red,
+// close calls are amber — visually distinct when both are layered.
+const BRAKE_MARKER_COLOR = '#dc2626';
+const CLOSE_CALL_MARKER_COLOR = '#f59e0b';
+
+// Circle-paint expression shared by both event layers. Only the
+// color differs.
+function markerPaint(color: string): maplibregl.CircleLayerSpecification['paint'] {
+  return {
+    'circle-radius': [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      10, 3,
+      15, 6,
+      18, 10,
+    ],
+    'circle-color': color,
+    'circle-stroke-color': '#ffffff',
+    'circle-stroke-width': 1.5,
+    'circle-opacity': 0.85,
+  };
 }
 
 export function PrivateBumpMap({
@@ -222,31 +224,40 @@ export function PrivateBumpMap({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const [active, setActive] = useState<LayerId>('bumps');
+
+  const [visible, setVisible] = useState<VisibleLayers>(DEFAULT_VISIBLE);
   const [rides, setRides] = useState<RidesFilter>('mounted');
   const [mode, setMode] = useState<TileMode>('all');
   const [percentile, setPercentile] = useState<TilePercentile>('all');
   const [bumpAgg, setBumpAgg] = useState<TileBumpAgg>('avg');
   const [metric, setMetric] = useState<IncidentMetric>('count');
   const [norm, setNorm] = useState<IncidentNorm>('raw');
-  const [incidentView, setIncidentView] = useState<IncidentView>('cells');
+
+  // Event counts shown in caption when those layers are visible.
+  const [brakeEventsCount, setBrakeEventsCount] = useState<number | null>(null);
+  const [brakeEventsTruncated, setBrakeEventsTruncated] = useState(false);
+  const [closeEventsCount, setCloseEventsCount] = useState<number | null>(null);
+  const [closeEventsTruncated, setCloseEventsTruncated] = useState(false);
 
   // SSR-safe rides hydration on mount.
   useEffect(() => {
     setRides(readStoredRides());
   }, []);
 
-  // Persist rides changes (the other axes are transient).
   function selectRides(next: RidesFilter) {
     setRides(next);
     try {
       localStorage.setItem(STORE_RIDES, next);
-      // Don't bother clearing the old key — readStoredRides falls
-      // back to it gracefully and a write to the new key wins on
-      // next read.
     } catch {}
   }
 
+  function toggleLayer<K extends keyof VisibleLayers>(key: K) {
+    setVisible((v) => ({ ...v, [key]: !v[key] }));
+  }
+
+  // Map construction (mount only). All sources/layers registered up
+  // front with visibility='none'; the visibility effect toggles them
+  // based on the `visible` record.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -263,68 +274,71 @@ export function PrivateBumpMap({
     mapRef.current = map;
 
     map.on('load', () => {
-      for (const l of LAYERS) {
-        map.addSource(l.id, {
-          type: 'raster',
-          tiles: [tileUrlFor(l.id, l.tilesBase, rides, mode, percentile, bumpAgg, metric, norm)],
-          tileSize: 256,
-          attribution: l.attribution,
-        });
-        map.addLayer({
-          id: l.id,
-          type: 'raster',
-          source: l.id,
-          layout: { visibility: l.id === 'bumps' ? 'visible' : 'none' },
-        });
-      }
-      // Coverage halo backdrop — translucent purple halo over every
-      // cell the user has visited. Used in events mode so the
-      // sparse markers aren't floating against the basemap with no
-      // context. Lives between the raster incident layers and the
-      // event markers so it sits "behind" the dots.
-      map.addSource(COVERAGE_HALO_SOURCE_ID, {
+      // Three raster cell layers (one per data source).
+      map.addSource(SRC_BUMPS, {
         type: 'raster',
-        tiles: [coverageHaloUrl(rides, mode)],
+        tiles: [bumpsTileUrl(rides, mode, percentile, bumpAgg)],
+        tileSize: 256,
+        attribution: 'Your bump data',
+      });
+      map.addLayer({ id: SRC_BUMPS, type: 'raster', source: SRC_BUMPS, layout: { visibility: 'visible' } });
+
+      map.addSource(SRC_BRAKE_CELLS, {
+        type: 'raster',
+        tiles: [brakesTileUrl(rides, mode, percentile, metric, norm)],
+        tileSize: 256,
+        attribution: 'Your brake events',
+      });
+      map.addLayer({ id: SRC_BRAKE_CELLS, type: 'raster', source: SRC_BRAKE_CELLS, layout: { visibility: 'none' } });
+
+      map.addSource(SRC_CLOSE_CELLS, {
+        type: 'raster',
+        tiles: [closeCallsTileUrl(rides, mode, percentile, norm)],
+        tileSize: 256,
+        attribution: 'Your close calls',
+      });
+      map.addLayer({ id: SRC_CLOSE_CELLS, type: 'raster', source: SRC_CLOSE_CELLS, layout: { visibility: 'none' } });
+
+      // Coverage halo backdrop — translucent purple halo over every
+      // cell the user has visited. Independent toggle so the user
+      // can pull it up for context any time.
+      map.addSource(SRC_HALO, {
+        type: 'raster',
+        tiles: [bumpsTileUrl(rides, mode, 'all', 'avg', 'halo')],
         tileSize: 256,
       });
       map.addLayer({
-        id: COVERAGE_HALO_LAYER_ID,
+        id: SRC_HALO,
         type: 'raster',
-        source: COVERAGE_HALO_SOURCE_ID,
+        source: SRC_HALO,
         layout: { visibility: 'none' },
-        // Kept deliberately faint — the backdrop should hint at
-        // "where you've been" without competing with the event
-        // markers for attention.
         paint: { 'raster-opacity': 0.25 },
       });
-      // Events overlay — GeoJSON circle layer on top so the markers
-      // sit above the halo backdrop. Hidden until the user picks
-      // brakes or close-calls + Events view.
-      map.addSource(EVENTS_SOURCE_ID, {
+
+      // Two GeoJSON event sources — independent so brake and close-
+      // call markers can be on simultaneously with distinct colors.
+      map.addSource(SRC_BRAKE_EVENTS, {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
       });
       map.addLayer({
-        id: EVENTS_LAYER_ID,
+        id: SRC_BRAKE_EVENTS,
         type: 'circle',
-        source: EVENTS_SOURCE_ID,
+        source: SRC_BRAKE_EVENTS,
         layout: { visibility: 'none' },
-        paint: {
-          // Zoom-scaled radius so markers are visible at city zoom
-          // but don't overwhelm at street zoom.
-          'circle-radius': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            10, 3,
-            15, 6,
-            18, 10,
-          ],
-          'circle-color': '#ff6b6b',
-          'circle-stroke-color': '#ffffff',
-          'circle-stroke-width': 1.5,
-          'circle-opacity': 0.85,
-        },
+        paint: markerPaint(BRAKE_MARKER_COLOR),
+      });
+
+      map.addSource(SRC_CLOSE_EVENTS, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer({
+        id: SRC_CLOSE_EVENTS,
+        type: 'circle',
+        source: SRC_CLOSE_EVENTS,
+        layout: { visibility: 'none' },
+        paint: markerPaint(CLOSE_CALL_MARKER_COLOR),
       });
     });
 
@@ -332,163 +346,159 @@ export function PrivateBumpMap({
       mapRef.current = null;
       map.remove();
     };
-    // Initial URL is baked in once; subsequent param changes are
-    // pushed via setTiles below to preserve pan/zoom.
+    // Initial URLs are baked in once; the retile effect handles
+    // subsequent config changes via setTiles.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minLat, maxLat, minLon, maxLon]);
 
-  // Layer-tab visibility toggle. Close-calls + events mode swaps
-  // the active raster incident layer for the GeoJSON events overlay,
-  // and shows the coverage halo backdrop so events have context.
+  // Visibility effect — applies `visible` to every layer.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const isIncident = active === 'brakes' || active === 'close-calls';
-    const showEvents = isIncident && incidentView === 'events';
     const apply = () => {
-      for (const l of LAYERS) {
-        if (!map.getLayer(l.id)) continue;
-        // Hide the active raster incident layer in events mode —
-        // the markers + halo backdrop take its place.
-        const shouldShow =
-          l.id === active && !(showEvents && (l.id === 'brakes' || l.id === 'close-calls'));
-        map.setLayoutProperty(
-          l.id,
-          'visibility',
-          shouldShow ? 'visible' : 'none',
-        );
-      }
-      if (map.getLayer(EVENTS_LAYER_ID)) {
-        map.setLayoutProperty(
-          EVENTS_LAYER_ID,
-          'visibility',
-          showEvents ? 'visible' : 'none',
-        );
-      }
-      if (map.getLayer(COVERAGE_HALO_LAYER_ID)) {
-        map.setLayoutProperty(
-          COVERAGE_HALO_LAYER_ID,
-          'visibility',
-          showEvents ? 'visible' : 'none',
-        );
-      }
+      const setVis = (id: string, on: boolean) => {
+        if (map.getLayer(id)) {
+          map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+        }
+      };
+      setVis(SRC_BUMPS, visible.bumps);
+      setVis(SRC_BRAKE_CELLS, visible.brakeCells);
+      setVis(SRC_CLOSE_CELLS, visible.closeCells);
+      setVis(SRC_BRAKE_EVENTS, visible.brakeEvents);
+      setVis(SRC_CLOSE_EVENTS, visible.closeEvents);
+      setVis(SRC_HALO, visible.halo);
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [active, incidentView]);
+  }, [visible]);
 
-  // Rides / mode / percentile / agg changes → retile every layer.
+  // Retile effect — pushes URL changes to every raster source.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     const apply = () => {
-      for (const l of LAYERS) {
-        const src = map.getSource(l.id);
-        if (!src || src.type !== 'raster') continue;
-        (src as maplibregl.RasterTileSource).setTiles([
-          tileUrlFor(l.id, l.tilesBase, rides, mode, percentile, bumpAgg, metric, norm),
-        ]);
-      }
-      // Coverage halo URL only depends on rides + mode (no agg /
-      // percentile — it's halo-only by definition). Re-tile it
-      // whenever those change.
-      const haloSrc = map.getSource(COVERAGE_HALO_SOURCE_ID);
-      if (haloSrc && haloSrc.type === 'raster') {
-        (haloSrc as maplibregl.RasterTileSource).setTiles([
-          coverageHaloUrl(rides, mode),
-        ]);
-      }
+      const setTiles = (id: string, url: string) => {
+        const src = map.getSource(id);
+        if (src && src.type === 'raster') {
+          (src as maplibregl.RasterTileSource).setTiles([url]);
+        }
+      };
+      setTiles(SRC_BUMPS, bumpsTileUrl(rides, mode, percentile, bumpAgg));
+      setTiles(SRC_BRAKE_CELLS, brakesTileUrl(rides, mode, percentile, metric, norm));
+      setTiles(SRC_CLOSE_CELLS, closeCallsTileUrl(rides, mode, percentile, norm));
+      // Halo URL ignores percentile + agg by design — it's a "where
+      // have I been" backdrop, scoped only by rides + time window.
+      setTiles(SRC_HALO, bumpsTileUrl(rides, mode, 'all', 'avg', 'halo'));
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
   }, [rides, mode, percentile, bumpAgg, metric, norm]);
 
-  // Incident events fetcher. Active whenever brakes OR close-calls
-  // + events is the current view. Refetches on viewport change
-  // (moveend), filter changes, and active-layer changes. Reports
-  // the count back so the caption can show "showing N events".
-  const [eventsCount, setEventsCount] = useState<number | null>(null);
-  const [eventsTruncated, setEventsTruncated] = useState(false);
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const isIncident = active === 'brakes' || active === 'close-calls';
-    const showEvents = isIncident && incidentView === 'events';
-    const endpoint = showEvents ? eventsEndpointFor(active) : null;
-    if (!endpoint) {
-      setEventsCount(null);
-      setEventsTruncated(false);
-      return;
-    }
+  // Generic events fetcher hook — re-runs whenever the layer
+  // becomes visible OR when rides/mode change. moveend triggers
+  // re-fetch while the layer is visible.
+  useEventsFetch({
+    mapRef,
+    sourceId: SRC_BRAKE_EVENTS,
+    endpoint: '/api/me/brakes/events',
+    visible: visible.brakeEvents,
+    rides,
+    mode,
+    setCount: setBrakeEventsCount,
+    setTruncated: setBrakeEventsTruncated,
+  });
+  useEventsFetch({
+    mapRef,
+    sourceId: SRC_CLOSE_EVENTS,
+    endpoint: '/api/me/close-calls/events',
+    visible: visible.closeEvents,
+    rides,
+    mode,
+    setCount: setCloseEventsCount,
+    setTruncated: setCloseEventsTruncated,
+  });
 
-    let cancelled = false;
-    async function refresh() {
-      if (!map || !endpoint) return;
-      const b = map.getBounds();
-      const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
-      const params: string[] = [`bbox=${encodeURIComponent(bbox)}`, `rides=${rides}`];
-      if (mode === '3mo') params.push('mode=3mo');
-      // mode=last10 doesn't have a clean events-mode analogue; the
-      // events endpoints ignore it and serve all-mode.
-      try {
-        const res = await fetch(`${endpoint}?${params.join('&')}`, {
-          credentials: 'same-origin',
-        });
-        if (cancelled || !res.ok) return;
-        const json = (await res.json()) as GeoJSON.FeatureCollection;
-        const src = map.getSource(EVENTS_SOURCE_ID);
-        if (src && 'setData' in src) {
-          (src as maplibregl.GeoJSONSource).setData(json);
-        }
-        setEventsCount(json.features.length);
-        setEventsTruncated(res.headers.get('X-Truncated') === 'true');
-      } catch (err) {
-        if (!cancelled) console.error('events fetch failed', err);
-      }
-    }
+  // Caption beneath the tab strips. Events counts take priority,
+  // then percentile / mode / rides explainers fall through.
+  const captionParts: string[] = [];
+  if (visible.brakeEvents && brakeEventsCount !== null) {
+    captionParts.push(
+      `${brakeEventsCount.toLocaleString()} brake event${brakeEventsCount === 1 ? '' : 's'}${brakeEventsTruncated ? '*' : ''}`,
+    );
+  }
+  if (visible.closeEvents && closeEventsCount !== null) {
+    captionParts.push(
+      `${closeEventsCount.toLocaleString()} close-call${closeEventsCount === 1 ? '' : 's'}${closeEventsTruncated ? '*' : ''}`,
+    );
+  }
+  const eventsCaption = captionParts.length
+    ? `Showing ${captionParts.join(' · ')} in viewport.${brakeEventsTruncated || closeEventsTruncated ? ' * capped — zoom in for the full set.' : ''}`
+    : null;
 
-    refresh();
-    const onMoveEnd = () => refresh();
-    map.on('moveend', onMoveEnd);
-    return () => {
-      cancelled = true;
-      map.off('moveend', onMoveEnd);
-    };
-  }, [active, incidentView, rides, mode]);
+  const fallbackCaption =
+    percentile !== 'all'
+      ? PERCENTILE_HELP[percentile]
+      : mode !== 'all'
+        ? MODE_HELP[mode]
+        : RIDES_HELP[rides];
+  const caption = eventsCaption ?? fallbackCaption;
 
-  // Live caption beneath the tab strips. Layer-specific axes win
-  // (agg for bumps; metric/norm/view for incidents); then the
-  // global axes (percentile > mode > rides).
-  const isIncidentActive = active === 'brakes' || active === 'close-calls';
-  const eventsCaption =
-    isIncidentActive && incidentView === 'events' && eventsCount !== null
-      ? `Showing ${eventsCount.toLocaleString()} event${eventsCount === 1 ? '' : 's'}${eventsTruncated ? ' (capped — zoom in for full set)' : ''}.`
-      : null;
-  const caption =
-    eventsCaption ??
-    (active === 'bumps' && bumpAgg !== 'avg'
-      ? BUMP_AGG_HELP[bumpAgg]
-      : isIncidentActive && incidentView === 'events'
-        ? INCIDENT_VIEW_HELP.events
-        : active === 'brakes' && metric !== 'count'
-          ? INCIDENT_METRIC_HELP[metric]
-          : isIncidentActive && norm !== 'raw'
-            ? INCIDENT_NORM_HELP[norm]
-            : percentile !== 'all'
-              ? PERCENTILE_HELP[percentile]
-              : mode !== 'all'
-                ? MODE_HELP[mode]
-                : RIDES_HELP[rides]);
+  // Conditional tab strips — only show settings relevant to a
+  // currently-visible layer. Keeps the chrome quiet when the user
+  // only has one layer up.
+  const showBumpAgg = visible.bumps;
+  const showMetric = visible.brakeCells;
+  const showNorm = visible.brakeCells || visible.closeCells;
+
+  const legendItems: ReadonlyArray<LegendItem> = [
+    {
+      id: 'bumps',
+      label: 'Bumpiness',
+      visible: visible.bumps,
+      onToggle: () => toggleLayer('bumps'),
+      swatch: <ColorSquareSwatch from="#00cc00" to="#ff7700" />,
+    },
+    {
+      id: 'brakeCells',
+      label: 'Brake cells',
+      visible: visible.brakeCells,
+      onToggle: () => toggleLayer('brakeCells'),
+      swatch: <ColorSquareSwatch from="#ffbb00" to="#aa00dd" />,
+    },
+    {
+      id: 'brakeEvents',
+      label: 'Brake events',
+      visible: visible.brakeEvents,
+      onToggle: () => toggleLayer('brakeEvents'),
+      swatch: <CircleMarkerSwatch color={BRAKE_MARKER_COLOR} />,
+    },
+    {
+      id: 'closeCells',
+      label: 'Close-call cells',
+      visible: visible.closeCells,
+      onToggle: () => toggleLayer('closeCells'),
+      swatch: <ColorSquareSwatch from="#ffbb00" to="#aa00dd" />,
+    },
+    {
+      id: 'closeEvents',
+      label: 'Close-call events',
+      visible: visible.closeEvents,
+      onToggle: () => toggleLayer('closeEvents'),
+      swatch: <CircleMarkerSwatch color={CLOSE_CALL_MARKER_COLOR} />,
+    },
+    {
+      id: 'halo',
+      label: 'Visited cells',
+      hint: 'halo',
+      visible: visible.halo,
+      onToggle: () => toggleLayer('halo'),
+      swatch: <HaloSwatch />,
+    },
+  ];
 
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <TabStrip
-          ariaLabel="Map layer"
-          values={LAYERS.map((l) => ({ id: l.id, label: l.label, help: '' }))}
-          current={active}
-          onChange={(v) => setActive(v as LayerId)}
-        />
         <TabStrip
           ariaLabel="Rides"
           values={(['mounted', 'pocket', 'all'] as RidesFilter[]).map((r) => ({
@@ -519,7 +529,7 @@ export function PrivateBumpMap({
           current={percentile}
           onChange={(v) => setPercentile(v as TilePercentile)}
         />
-        {active === 'bumps' && (
+        {showBumpAgg && (
           <TabStrip
             ariaLabel="Aggregation"
             values={TILE_BUMP_AGGS.map((a) => ({
@@ -531,7 +541,7 @@ export function PrivateBumpMap({
             onChange={(v) => setBumpAgg(v as TileBumpAgg)}
           />
         )}
-        {active === 'brakes' && incidentView === 'cells' && (
+        {showMetric && (
           <TabStrip
             ariaLabel="Metric"
             values={INCIDENT_METRICS.map((m) => ({
@@ -543,10 +553,7 @@ export function PrivateBumpMap({
             onChange={(v) => setMetric(v as IncidentMetric)}
           />
         )}
-        {/* Normalization applies only to cell-aggregated incident
-            views (both brakes and close-calls). In events mode
-            there's nothing to normalize per-event. */}
-        {isIncidentActive && incidentView === 'cells' ? (
+        {showNorm && (
           <TabStrip
             ariaLabel="Normalization"
             values={INCIDENT_NORMS.map((n) => ({
@@ -557,27 +564,82 @@ export function PrivateBumpMap({
             current={norm}
             onChange={(v) => setNorm(v as IncidentNorm)}
           />
-        ) : null}
-        {isIncidentActive && (
-          <TabStrip
-            ariaLabel="View"
-            values={INCIDENT_VIEWS.map((v) => ({
-              id: v,
-              label: INCIDENT_VIEW_LABELS[v],
-              help: INCIDENT_VIEW_HELP[v],
-            }))}
-            current={incidentView}
-            onChange={(v) => setIncidentView(v as IncidentView)}
-          />
         )}
       </div>
       <p className="mb-3 text-xs text-text-muted">{caption}</p>
-      <div
-        ref={containerRef}
-        className="h-[640px] w-full overflow-hidden rounded-lg border border-border"
-      />
+      <div className="relative">
+        <div
+          ref={containerRef}
+          className="h-[640px] w-full overflow-hidden rounded-lg border border-border"
+        />
+        <MapLegend items={legendItems} />
+      </div>
     </div>
   );
+}
+
+// Shared events-fetch effect. Single source/endpoint per call —
+// brakes and close-calls each get their own invocation.
+function useEventsFetch({
+  mapRef,
+  sourceId,
+  endpoint,
+  visible,
+  rides,
+  mode,
+  setCount,
+  setTruncated,
+}: {
+  mapRef: React.MutableRefObject<maplibregl.Map | null>;
+  sourceId: string;
+  endpoint: string;
+  visible: boolean;
+  rides: RidesFilter;
+  mode: TileMode;
+  setCount: (n: number | null) => void;
+  setTruncated: (b: boolean) => void;
+}) {
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!visible) {
+      setCount(null);
+      setTruncated(false);
+      return;
+    }
+
+    let cancelled = false;
+    async function refresh() {
+      if (!map) return;
+      const b = map.getBounds();
+      const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+      const params: string[] = [`bbox=${encodeURIComponent(bbox)}`, `rides=${rides}`];
+      if (mode === '3mo') params.push('mode=3mo');
+      try {
+        const res = await fetch(`${endpoint}?${params.join('&')}`, {
+          credentials: 'same-origin',
+        });
+        if (cancelled || !res.ok) return;
+        const json = (await res.json()) as GeoJSON.FeatureCollection;
+        const src = map.getSource(sourceId);
+        if (src && 'setData' in src) {
+          (src as maplibregl.GeoJSONSource).setData(json);
+        }
+        setCount(json.features.length);
+        setTruncated(res.headers.get('X-Truncated') === 'true');
+      } catch (err) {
+        if (!cancelled) console.error(`events fetch failed (${sourceId})`, err);
+      }
+    }
+
+    refresh();
+    const onMoveEnd = () => refresh();
+    map.on('moveend', onMoveEnd);
+    return () => {
+      cancelled = true;
+      map.off('moveend', onMoveEnd);
+    };
+  }, [mapRef, sourceId, endpoint, visible, rides, mode, setCount, setTruncated]);
 }
 
 function TabStrip({

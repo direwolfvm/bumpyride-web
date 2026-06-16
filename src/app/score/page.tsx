@@ -1,9 +1,10 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { auth } from '@/auth';
 import { db } from '@/db';
-import { userScores, users } from '@/db/schema';
+import { rides, userScores, users } from '@/db/schema';
+import { formatDistance, formatDuration } from '@/lib/formatters';
 import { LEVELS, levelFor } from '@/lib/levels';
 
 export const dynamic = 'force-dynamic';
@@ -17,7 +18,7 @@ export default async function ScorePage() {
   if (!session?.user?.id) redirect('/login?next=%2Fscore');
   const userId = session.user.id;
 
-  const [user, score] = await Promise.all([
+  const [user, score, ridesAgg] = await Promise.all([
     db.query.users.findFirst({
       where: eq(users.id, userId),
       columns: { shareToPublicMap: true },
@@ -25,6 +26,21 @@ export default async function ScorePage() {
     db.query.userScores.findFirst({
       where: eq(userScores.userId, userId),
     }),
+    // Lifetime totals across every ride — mode-agnostic so it
+    // counts even pocket-mode rides that don't earn points. Riders
+    // care about "how much have I ridden total."
+    db
+      .select({
+        rideCount: sql<number>`COUNT(*)::int`,
+        totalDistanceM: sql<number>`COALESCE(SUM(${rides.distanceM}), 0)::float8`,
+        totalDurationSec: sql<number>`
+          COALESCE(
+            SUM(EXTRACT(EPOCH FROM (${rides.endedAt} - ${rides.startedAt}))),
+            0
+          )::float8`,
+      })
+      .from(rides)
+      .where(eq(rides.userId, userId)),
   ]);
 
   if (!user) redirect('/login');
@@ -36,6 +52,10 @@ export default async function ScorePage() {
   const repeat = score?.repeatCount ?? 0;
   const { level, nextThreshold, progress } = levelFor(totalPoints);
 
+  const rideCount = Number(ridesAgg[0]?.rideCount ?? 0);
+  const totalDistanceM = Number(ridesAgg[0]?.totalDistanceM ?? 0);
+  const totalDurationSec = Number(ridesAgg[0]?.totalDurationSec ?? 0);
+
   return (
     <div className="mx-auto max-w-3xl">
       <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
@@ -46,6 +66,15 @@ export default async function ScorePage() {
         ground, return often. Only mounted-mode rides with public sharing
         on count.
       </p>
+
+      {/* Lifetime totals — every ride counts here, even pocket-mode
+          rides that don't earn points. Gives the user a sense of how
+          much they've actually ridden, separate from their score. */}
+      <dl className="mt-6 grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-border bg-border">
+        <TotalStat label="Rides" value={rideCount.toLocaleString()} />
+        <TotalStat label="Distance" value={rideCount > 0 ? formatDistance(totalDistanceM) : '—'} />
+        <TotalStat label="Time" value={rideCount > 0 ? formatDuration(totalDurationSec) : '—'} />
+      </dl>
 
       {!user.shareToPublicMap ? (
         <div className="mt-6 rounded-lg border border-dashed border-border bg-surface p-6">
@@ -207,6 +236,15 @@ export default async function ScorePage() {
           })}
         </ol>
       </section>
+    </div>
+  );
+}
+
+function TotalStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-surface px-4 py-3">
+      <dt className="text-xs uppercase tracking-wide text-text-muted">{label}</dt>
+      <dd className="mt-0.5 whitespace-nowrap text-lg font-medium tabular-nums">{value}</dd>
     </div>
   );
 }

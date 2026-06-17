@@ -290,21 +290,19 @@ export async function GET(
           return { lo: Number(row.lo), hi: Number(row.hi) };
         },
       );
-      // Split into colored (in-bucket) + halo-only (out-of-bucket
-      // but still coverage). Keeping the out-of-bucket halo means
-      // the user keeps spatial context for the broader dataset
-      // while the in-bucket cells stand out.
+      // Filter down to in-bucket cells only. Out-of-bucket cells
+      // drop out entirely — picking Best/Worst 10% should isolate
+      // those cells, not also draw the broader coverage as halo.
+      // (Users who want coverage context turn on the "Visited cells"
+      // legend layer.)
       coloredCells = [];
-      const haloOnly: { ix: number; iy: number }[] = [];
       for (const c of allCells) {
         if (c.count <= 0) continue;
         const avg = c.sum / c.count;
         const inBucket =
           percentile === 'top10' ? avg <= threshold.lo : avg >= threshold.hi;
         if (inBucket) coloredCells.push(c);
-        else haloOnly.push({ ix: c.ix, iy: c.iy });
       }
-      haloOnlyCells = haloOnly;
     } else {
       coloredCells = allCells;
     }

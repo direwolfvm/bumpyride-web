@@ -267,20 +267,18 @@ export async function GET(
       haloOnlyCells = allCells.filter((c) => c.count > 0);
     } else if (percentile !== 'all') {
       const threshold = await fetchPercentileThreshold(mode, agg);
+      // Filter to in-bucket cells only — out-of-bucket cells drop
+      // out entirely so Best/Worst 10% isolates exactly those cells.
+      // Coverage context is available via the "Visited cells"
+      // legend toggle.
       coloredCells = [];
-      const haloOnly: { ix: number; iy: number }[] = [];
-      // Split into in-bucket (colored) and out-of-bucket coverage
-      // (halo only). Keeps spatial context for the broader public
-      // dataset visible.
       for (const c of allCells) {
         if (c.count <= 0) continue;
         const avg = c.sum / c.count;
         const inBucket =
           percentile === 'top10' ? avg <= threshold.lo : avg >= threshold.hi;
         if (inBucket) coloredCells.push(c);
-        else haloOnly.push({ ix: c.ix, iy: c.iy });
       }
-      haloOnlyCells = haloOnly;
     } else {
       coloredCells = allCells;
     }

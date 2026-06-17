@@ -62,17 +62,11 @@ export function incidentValueExpr(
   return norm === 'freq' ? `${num} / cov.rides` : num;
 }
 
-// Split a per-cell incident set into (in-bucket colored, out-of-bucket
-// coverage). Used by every incident tile route's percentile path so
-// they all expose the same "halo-on-coverage" UX.
-//
-// Rules:
-//   - value <= 0: never colored; goes to halo-only so the user
-//     sees the bump-coverage cell as context.
-//   - value > 0 AND in bucket: colored with the metric ramp.
-//   - value > 0 AND out of bucket: halo-only.
-//
-// Returns `{ colored, haloOnly }` ready to hand to renderIncidentTile.
+// Filter a per-cell incident set down to the in-bucket cells the
+// percentile-toggle picks out. Cells outside the bucket (or with
+// zero value) drop out entirely — the user is asking specifically
+// for the best / worst 10%, and broader spatial context is available
+// via the "Visited cells" toggle if they want it.
 export function splitIncidentCells(
   allCells: IncidentCell[],
   percentile: TilePercentile,
@@ -83,20 +77,15 @@ export function splitIncidentCells(
 } {
   if (percentile === 'all') return { colored: allCells, haloOnly: [] };
   const colored: IncidentCell[] = [];
-  const haloOnly: { ix: number; iy: number }[] = [];
   for (const c of allCells) {
-    if (c.value <= 0) {
-      haloOnly.push({ ix: c.ix, iy: c.iy });
-      continue;
-    }
+    if (c.value <= 0) continue;
     const inBucket =
       percentile === 'top10'
         ? c.value <= threshold.lo
         : c.value >= threshold.hi;
     if (inBucket) colored.push(c);
-    else haloOnly.push({ ix: c.ix, iy: c.iy });
   }
-  return { colored, haloOnly };
+  return { colored, haloOnly: [] };
 }
 
 // SQL fragment that produces (n, intensity) per cell from a source

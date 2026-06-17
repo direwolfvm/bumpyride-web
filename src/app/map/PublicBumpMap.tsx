@@ -7,7 +7,6 @@ import { basemapStyleForCurrentTheme } from '@/lib/map-style';
 import {
   CircleMarkerSwatch,
   ColorSquareSwatch,
-  HaloSwatch,
   MapLegend,
   type LegendItem,
 } from '@/components/MapLegend';
@@ -34,7 +33,6 @@ type VisibleLayers = {
   brakeEvents: boolean;
   closeCells: boolean;
   closeEvents: boolean;
-  halo: boolean;
 };
 
 const DEFAULT_VISIBLE: VisibleLayers = {
@@ -43,7 +41,6 @@ const DEFAULT_VISIBLE: VisibleLayers = {
   brakeEvents: false,
   closeCells: false,
   closeEvents: false,
-  halo: false,
 };
 
 const MODE_LABELS: Record<TileMode, string> = {
@@ -109,7 +106,6 @@ const SRC_BRAKE_CELLS = 'brake-cells';
 const SRC_CLOSE_CELLS = 'close-call-cells';
 const SRC_BRAKE_EVENTS = 'brake-events';
 const SRC_CLOSE_EVENTS = 'close-call-events';
-const SRC_HALO = 'coverage-halo';
 
 const BRAKE_MARKER_COLOR = '#dc2626';
 const CLOSE_CALL_MARKER_COLOR = '#f59e0b';
@@ -118,13 +114,11 @@ function bumpsTileUrl(
   mode: TileMode,
   percentile: TilePercentile,
   agg: TileBumpAgg,
-  style: 'fill' | 'halo' = 'fill',
 ): string {
   const params: string[] = [];
   if (mode !== 'all') params.push(`mode=${mode}`);
   if (percentile !== 'all') params.push(`percentile=${percentile}`);
   if (agg !== 'avg') params.push(`agg=${agg}`);
-  if (style === 'halo') params.push('style=halo');
   const base = '/api/tiles/public/{z}/{x}/{y}';
   return params.length === 0 ? base : `${base}?${params.join('&')}`;
 }
@@ -244,19 +238,6 @@ export function PublicBumpMap({
       });
       map.addLayer({ id: SRC_CLOSE_CELLS, type: 'raster', source: SRC_CLOSE_CELLS, layout: { visibility: 'none' } });
 
-      map.addSource(SRC_HALO, {
-        type: 'raster',
-        tiles: [bumpsTileUrl(mode, 'all', 'avg', 'halo')],
-        tileSize: 256,
-      });
-      map.addLayer({
-        id: SRC_HALO,
-        type: 'raster',
-        source: SRC_HALO,
-        layout: { visibility: 'none' },
-        paint: { 'raster-opacity': 0.25 },
-      });
-
       map.addSource(SRC_BRAKE_EVENTS, {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -303,7 +284,6 @@ export function PublicBumpMap({
       setVis(SRC_CLOSE_CELLS, visible.closeCells);
       setVis(SRC_BRAKE_EVENTS, visible.brakeEvents);
       setVis(SRC_CLOSE_EVENTS, visible.closeEvents);
-      setVis(SRC_HALO, visible.halo);
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
@@ -322,7 +302,6 @@ export function PublicBumpMap({
       setTiles(SRC_BUMPS, bumpsTileUrl(mode, percentile, bumpAgg));
       setTiles(SRC_BRAKE_CELLS, brakesTileUrl(mode, percentile, metric, norm));
       setTiles(SRC_CLOSE_CELLS, closeCallsTileUrl(mode, percentile, norm));
-      setTiles(SRC_HALO, bumpsTileUrl(mode, 'all', 'avg', 'halo'));
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
@@ -405,14 +384,6 @@ export function PublicBumpMap({
       visible: visible.closeEvents,
       onToggle: () => toggleLayer('closeEvents'),
       swatch: <CircleMarkerSwatch color={CLOSE_CALL_MARKER_COLOR} />,
-    },
-    {
-      id: 'halo',
-      label: 'Visited cells',
-      hint: 'halo',
-      visible: visible.halo,
-      onToggle: () => toggleLayer('halo'),
-      swatch: <HaloSwatch />,
     },
   ];
 

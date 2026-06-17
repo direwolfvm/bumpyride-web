@@ -102,16 +102,3 @@ export function CircleMarkerSwatch({ color }: { color: string }) {
   );
 }
 
-export function HaloSwatch() {
-  // Mimics the renderer's translucent purple halo. Pure CSS box-
-  // shadow so it stays sharp at any zoom.
-  return (
-    <span
-      className="block h-2 w-2 rounded-sm"
-      style={{
-        background: 'rgba(217, 128, 255, 0.35)',
-        boxShadow: '0 0 4px 1.5px rgba(140, 46, 242, 0.55)',
-      }}
-    />
-  );
-}

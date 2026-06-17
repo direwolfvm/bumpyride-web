@@ -246,6 +246,13 @@ export async function GET(
 
   const bbox = tileQueryBbox(z, x, y);
 
+  // ?style=halo strips the colored fill, leaving only the purple
+  // glow halo around every coverage cell. Used by the events-mode
+  // backdrop on the brakes / close-call layers so the user sees
+  // where they've been without the bumpiness color competing with
+  // the event markers.
+  const style = sp.get('style') === 'halo' ? 'halo' : 'fill';
+
   let coloredCells: Cell[];
   let haloOnlyCells: ReadonlyArray<{ ix: number; iy: number }> = [];
   try {
@@ -263,7 +270,12 @@ export async function GET(
       count: Number(r.count),
     }));
 
-    if (percentile !== 'all') {
+    if (style === 'halo') {
+      // No fill, halo-only — render every coverage cell as a glow
+      // backdrop. Skip the percentile / threshold work entirely.
+      coloredCells = [];
+      haloOnlyCells = allCells.filter((c) => c.count > 0);
+    } else if (percentile !== 'all') {
       const threshold = await getOrComputeThreshold(
         `user:bumpiness:${session.user.id}:${rides}:${mode}:${agg}`,
         async (client) => {
@@ -278,21 +290,19 @@ export async function GET(
           return { lo: Number(row.lo), hi: Number(row.hi) };
         },
       );
-      // Split into colored (in-bucket) + halo-only (out-of-bucket
-      // but still coverage). Keeping the out-of-bucket halo means
-      // the user keeps spatial context for the broader dataset
-      // while the in-bucket cells stand out.
+      // Filter down to in-bucket cells only. Out-of-bucket cells
+      // drop out entirely — picking Best/Worst 10% should isolate
+      // those cells, not also draw the broader coverage as halo.
+      // (Users who want coverage context turn on the "Visited cells"
+      // legend layer.)
       coloredCells = [];
-      const haloOnly: { ix: number; iy: number }[] = [];
       for (const c of allCells) {
         if (c.count <= 0) continue;
         const avg = c.sum / c.count;
         const inBucket =
           percentile === 'top10' ? avg <= threshold.lo : avg >= threshold.hi;
         if (inBucket) coloredCells.push(c);
-        else haloOnly.push({ ix: c.ix, iy: c.iy });
       }
-      haloOnlyCells = haloOnly;
     } else {
       coloredCells = allCells;
     }

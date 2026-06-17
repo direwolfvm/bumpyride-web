@@ -246,6 +246,11 @@ export async function GET(
     url.searchParams.get('percentile'),
   );
   const agg: TileBumpAgg = parseTileBumpAgg(url.searchParams.get('agg'));
+  // ?style=halo strips the colored fill, leaving only the purple
+  // glow halo around every gate-passing cell. Used by the events-
+  // mode backdrop so users see public coverage without the colour
+  // ramp competing with event markers.
+  const style = url.searchParams.get('style') === 'halo' ? 'halo' : 'fill';
   const bbox = tileQueryBbox(z, x, y);
 
   let coloredCells: Cell[];
@@ -257,22 +262,23 @@ export async function GET(
       ? await queryAllModeFast(bbox)
       : await queryReaggregated(mode, agg, bbox);
 
-    if (percentile !== 'all') {
-      const threshold = await fetchPercentileThreshold(mode, agg);
+    if (style === 'halo') {
       coloredCells = [];
-      const haloOnly: { ix: number; iy: number }[] = [];
-      // Split into in-bucket (colored) and out-of-bucket coverage
-      // (halo only). Keeps spatial context for the broader public
-      // dataset visible.
+      haloOnlyCells = allCells.filter((c) => c.count > 0);
+    } else if (percentile !== 'all') {
+      const threshold = await fetchPercentileThreshold(mode, agg);
+      // Filter to in-bucket cells only — out-of-bucket cells drop
+      // out entirely so Best/Worst 10% isolates exactly those cells.
+      // Coverage context is available via the "Visited cells"
+      // legend toggle.
+      coloredCells = [];
       for (const c of allCells) {
         if (c.count <= 0) continue;
         const avg = c.sum / c.count;
         const inBucket =
           percentile === 'top10' ? avg <= threshold.lo : avg >= threshold.hi;
         if (inBucket) coloredCells.push(c);
-        else haloOnly.push({ ix: c.ix, iy: c.iy });
       }
-      haloOnlyCells = haloOnly;
     } else {
       coloredCells = allCells;
     }

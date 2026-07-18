@@ -317,8 +317,9 @@ export const userScores = pgTable('user_scores', {
   totalPoints: bigint('total_points', { mode: 'number' }).notNull().default(0),
   firstEverCount: integer('first_ever_count').notNull().default(0),
   firstUserCount: integer('first_user_count').notNull().default(0),
-  // Repeats where the user's previous visit to the cell was more
-  // than STALE_REFRESH_DAYS ago (see src/lib/scoring.ts). 3 pts each.
+  // Repeats where the cell's most recent prior value — from ANY
+  // user — was more than STALE_REFRESH_DAYS older than the ride
+  // (see src/lib/scoring.ts). 3 pts each.
   staleRefreshCount: integer('stale_refresh_count').notNull().default(0),
   repeatCount: integer('repeat_count').notNull().default(0),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

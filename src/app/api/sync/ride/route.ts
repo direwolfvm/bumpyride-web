@@ -471,6 +471,7 @@ export async function POST(req: NextRequest) {
         userId,
         cellsForScoring,
         willBeInPublic,
+        new Date(payload.startedAt),
       );
     }
 

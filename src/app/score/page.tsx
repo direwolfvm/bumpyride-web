@@ -149,7 +149,7 @@ export default async function ScorePage() {
             />
             <Breakdown
               label="Stale-refresh"
-              caption="You returned to a cell more than 10 days after your last measurement there."
+              caption="You re-measured a cell more than 10 days after its most recent value from any rider."
               count={staleRefresh}
               points={staleRefresh * 3}
               perCell="3 pts"
@@ -181,12 +181,13 @@ export default async function ScorePage() {
           </li>
           <li>
             <strong className="text-text">3 points</strong> — A return
-            visit to one of your cells more than 10 days after your last
-            ride through it. Rewards keeping your coverage fresh.
+            visit to a cell whose most recent measurement — by any
+            rider — is more than 10 days older than your ride. Rewards
+            refreshing stale data on the map.
           </li>
           <li>
             <strong className="text-text">1 point</strong> — A repeat
-            visit within the last 10 days.
+            visit to a cell someone measured within the last 10 days.
           </li>
           <li>
             Only your <strong>mounted-mode</strong> rides count, matching

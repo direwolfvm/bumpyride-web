@@ -411,7 +411,7 @@ function ScoreBreakdown({
     },
     {
       label: 'Refreshed',
-      hint: 'returned after 10+ days away',
+      hint: 'cell data was 10+ days stale',
       count: breakdown.staleRefresh,
       per: 3,
     },

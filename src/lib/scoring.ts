@@ -9,19 +9,32 @@ import { CELL_LAT_DEG, CELL_LON_DEG } from '@/lib/bump-grid';
 // everything in BEGIN/COMMIT, and scoring needs to be atomic with
 // the rest of those changes.
 //
-// Tier ladder (also documented in migrations/0014, /0016 and on the
-// /score page):
+// Tier ladder (also documented in migrations/0014, /0016, /0017 and
+// on the /score page):
 //
 //   10  first user EVER to record bump data in this cell
 //    5  first ride by THIS user to a cell other users already had
-//    3  repeat visit, but the user's previous ride to this cell was
-//       more than STALE_REFRESH_DAYS ago — rewards keeping coverage
-//       fresh
-//    1  any other repeat visit
+//    3  repeat visit to a cell whose most recent prior value — from
+//       ANY user, not just this one — is more than STALE_REFRESH_DAYS
+//       older than this ride. Rewards refreshing stale public data.
+//    1  repeat visit to a cell someone measured within the window
+//
+// Anchoring: every gap comparison uses the RIDE's recorded time
+// (rides.started_at), never the sync time, and tier checks only
+// consider events from strictly-earlier ride times. Two important
+// consequences:
+//   - Syncing a backlog of rides in one batch still yields the same
+//     tiers as syncing them live, because the recorded ride times
+//     carry the real gaps.
+//   - Recomputing a ride (re-upload) is deterministic: it sees the
+//     exact same "prior events" set every time, so a ride that
+//     earned a refresh keeps it. Later rides can never retroactively
+//     downgrade an earlier ride's tier.
+// score_events.created_at therefore stores the ride's started_at.
 
 // Threshold past which a repeat visit gets the refresh bonus. Keep
-// this in sync with the same constant referenced in the migration
-// (0016) and the /score page copy.
+// this in sync with the same constant referenced in the migrations
+// (0016, 0017) and the /score page copy.
 export const STALE_REFRESH_DAYS = 10;
 
 /**
@@ -39,12 +52,17 @@ export async function wipeUserScores(
 
 /**
  * Recompute score_events for a single ride. Always idempotent: wipes
- * the ride's existing rows first, then assigns tiers against the rest
- * of the world (i.e. excluding the rows we just deleted).
+ * the ride's existing rows first, then assigns tiers against events
+ * from strictly-earlier ride times (excluding the rows we just
+ * deleted). Because the evaluation window never includes later
+ * events, re-running this for the same ride always produces the
+ * same tiers — a refresh stays a refresh.
  *
- * `cells` is the set of unique 20 ft cells the new ride touches. If
- * the ride is not eligible (sharing off, pocket-mode ride, or empty
- * cell set) the rows just get wiped and we refresh the cache.
+ * `cells` is the set of unique 20 ft cells the new ride touches.
+ * `startedAt` is the ride's recorded start time — all gap math is
+ * anchored to it. If the ride is not eligible (sharing off,
+ * pocket-mode ride, or empty cell set) the rows just get wiped and
+ * we refresh the cache.
  */
 export async function recomputeRideScore(
   client: PoolClient,
@@ -52,6 +70,7 @@ export async function recomputeRideScore(
   userId: string,
   cells: ReadonlyArray<{ ix: number; iy: number }>,
   isEligible: boolean,
+  startedAt: Date,
 ): Promise<void> {
   await client.query('DELETE FROM score_events WHERE ride_uuid = $1', [
     rideUuid,
@@ -70,39 +89,44 @@ export async function recomputeRideScore(
     const ixs = cells.map((c) => c.ix);
     const iys = cells.map((c) => c.iy);
     await client.query(
-      `INSERT INTO score_events (user_id, ride_uuid, ix, iy, points)
+      `INSERT INTO score_events (user_id, ride_uuid, ix, iy, points, created_at)
        SELECT
          $1::uuid,
          $2::uuid,
          nc.ix,
          nc.iy,
          CASE
+           -- 10: nobody (any user) had recorded this cell before this
+           -- ride's recorded time.
            WHEN NOT EXISTS (
              SELECT 1 FROM score_events se
               WHERE se.ix = nc.ix AND se.iy = nc.iy
+                AND se.created_at < $5
            ) THEN 10
+           -- 5: others had it, but this user hadn't been there yet.
            WHEN NOT EXISTS (
              SELECT 1 FROM score_events se
               WHERE se.ix = nc.ix
                 AND se.iy = nc.iy
                 AND se.user_id = $1::uuid
+                AND se.created_at < $5
            ) THEN 5
-           -- 3 pts: user has been in this cell before, but their last
-           -- visit was more than STALE_REFRESH_DAYS ago. "Last visit"
-           -- is the newest score_event.created_at for this (user,
-           -- cell) pair; the new event we're about to insert defaults
-           -- to now(), so we measure the gap against now().
+           -- 3: repeat visit, and NO public value (from any user)
+           -- exists within the STALE_REFRESH_DAYS window before this
+           -- ride — the cell's data was stale and this ride
+           -- refreshed it.
            WHEN NOT EXISTS (
              SELECT 1 FROM score_events se
               WHERE se.ix = nc.ix
                 AND se.iy = nc.iy
-                AND se.user_id = $1::uuid
-                AND se.created_at > now() - interval '${STALE_REFRESH_DAYS} days'
+                AND se.created_at < $5
+                AND se.created_at > $5 - interval '${STALE_REFRESH_DAYS} days'
            ) THEN 3
            ELSE 1
-         END
+         END,
+         $5
        FROM unnest($3::int[], $4::int[]) AS nc(ix, iy)`,
-      [userId, rideUuid, ixs, iys],
+      [userId, rideUuid, ixs, iys, startedAt],
     );
   }
 
@@ -128,15 +152,15 @@ export async function backfillUserScores(
   await client.query('DELETE FROM score_events WHERE user_id = $1', [userId]);
 
   // Single big window-function INSERT — same shape as the migration
-  // backfill but scoped to one user. Earlier rides get earlier tiers;
-  // global_rank=1 means "first ride to this cell across all users
-  // and time," user_rank=1 means "user's first ride to this cell."
+  // backfill but scoped to one user. Rides are ordered by their
+  // RECORDED time (started_at) so the backfill assigns the same
+  // tiers a live in-order sync would have.
   await client.query(
     `INSERT INTO score_events (user_id, ride_uuid, ix, iy, points, created_at)
      WITH ride_cells AS (
        SELECT DISTINCT
          r.ride_uuid,
-         r.created_at,
+         r.started_at,
          floor(rp.longitude / ${CELL_LON_DEG}::float8)::int AS ix,
          floor(rp.latitude  / ${CELL_LAT_DEG}::float8)::int AS iy
        FROM ride_points rp
@@ -150,26 +174,33 @@ export async function backfillUserScores(
          -- "First ever" claims for an opting-back-in user are
          -- evaluated against the CURRENT score_events state, not the
          -- original sync timeline: a user who opted out forfeited
-         -- their priority. So if any OTHER user already has a row
-         -- for this cell when the backfill runs, this user can't
-         -- claim 10 points for it — they slot in at the 5-point
-         -- tier (or 1/3 for repeats).
+         -- their priority. So if any OTHER user has a row for this
+         -- cell when the backfill runs — regardless of its time —
+         -- this user can't claim 10 points for it; they slot in at
+         -- the 5-point tier (or 1/3 for repeats).
          EXISTS (
            SELECT 1 FROM score_events se
             WHERE se.ix = rc.ix AND se.iy = rc.iy
               AND se.user_id <> $1
          ) AS other_user_has_cell,
+         -- Most recent prior public value from any OTHER user,
+         -- strictly before this ride's recorded time. Combined with
+         -- lag() over the user's own rides to find the latest prior
+         -- value overall for the refresh-gap check.
+         (
+           SELECT max(se.created_at) FROM score_events se
+            WHERE se.ix = rc.ix AND se.iy = rc.iy
+              AND se.user_id <> $1
+              AND se.created_at < rc.started_at
+         ) AS others_prev_at,
+         lag(started_at) OVER (
+           PARTITION BY ix, iy
+           ORDER BY started_at, ride_uuid
+         ) AS own_prev_at,
          rank() OVER (
            PARTITION BY ix, iy
-           ORDER BY created_at, ride_uuid
-         ) AS user_rank,
-         -- Gap to this user's previous ride to this cell. NULL for
-         -- the very first ride per (user, cell). Used to decide
-         -- between the 3-pt refresh tier and the 1-pt plain repeat.
-         created_at - lag(created_at) OVER (
-           PARTITION BY ix, iy
-           ORDER BY created_at, ride_uuid
-         ) AS prev_gap
+           ORDER BY started_at, ride_uuid
+         ) AS user_rank
        FROM ride_cells rc
      )
      SELECT
@@ -178,12 +209,18 @@ export async function backfillUserScores(
        ix,
        iy,
        CASE
-         WHEN user_rank > 1 AND prev_gap > interval '${STALE_REFRESH_DAYS} days' THEN 3
-         WHEN user_rank > 1                                                     THEN 1
-         WHEN other_user_has_cell                                               THEN 5
-         ELSE 10
+         WHEN user_rank = 1 AND NOT other_user_has_cell THEN 10
+         WHEN user_rank = 1                             THEN 5
+         -- Repeat: refresh iff the latest prior value in the cell —
+         -- own or anyone else's — is more than the window before
+         -- this ride's recorded time.
+         WHEN GREATEST(
+                COALESCE(own_prev_at,    timestamptz '-infinity'),
+                COALESCE(others_prev_at, timestamptz '-infinity')
+              ) < started_at - interval '${STALE_REFRESH_DAYS} days' THEN 3
+         ELSE 1
        END,
-       created_at
+       started_at
      FROM ranked`,
     [userId],
   );

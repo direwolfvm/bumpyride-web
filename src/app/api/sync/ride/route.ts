@@ -4,6 +4,10 @@ import { ZodError } from 'zod';
 import { pool } from '@/db';
 import { rideSchema, type RidePayload } from '@/lib/ride-schema';
 import { CELL_LAT_DEG, CELL_LON_DEG, gridIndex } from '@/lib/bump-grid';
+import {
+  isPublicEligible,
+  OTHER_EVENT_MAX_CUSTOM_KINDS_PER_ACCOUNT,
+} from '@/lib/other-events';
 import { recomputeRideScore } from '@/lib/scoring';
 import { lookupTokenUser, parseBearer } from '@/lib/tokens';
 
@@ -336,6 +340,70 @@ export async function POST(req: NextRequest) {
       }
       await client.query(
         'UPDATE rides SET close_calls_supported = TRUE WHERE ride_uuid = $1',
+        [payload.id],
+      );
+    }
+
+    // Other events (iOS v2.0). Same wipe-and-replace + three-state
+    // pattern as close calls. Privacy handling:
+    //   - is_custom stores the CLIENT's wire value verbatim so the
+    //     ride round-trips untouched on restore.
+    //   - is_public_eligible is computed here (registry membership ∧
+    //     NOT isCustom) and is the ONLY flag public surfaces may
+    //     filter on. Registry skew (client knows a newer built-in
+    //     kind than us) degrades toward privacy.
+    if (payload.otherEvents !== undefined && payload.otherEvents !== null) {
+      await client.query('DELETE FROM other_events WHERE ride_uuid = $1', [
+        payload.id,
+      ]);
+
+      // Server-side mirror of the iOS 20-distinct-custom-kinds cap.
+      // Counted over the account's wire-custom kinds (registry-skew
+      // events don't count against the rider's label budget). This
+      // ride's rows were just wiped, so the union below can't
+      // double-count a re-upload.
+      const incomingCustomKinds = new Set(
+        payload.otherEvents.filter((e) => e.isCustom).map((e) => e.kind),
+      );
+      if (incomingCustomKinds.size > 0) {
+        const existing = await client.query<{ kind: string }>(
+          'SELECT DISTINCT kind FROM other_events WHERE user_id = $1 AND is_custom',
+          [userId],
+        );
+        const union = new Set(existing.rows.map((r) => r.kind));
+        for (const k of incomingCustomKinds) union.add(k);
+        if (union.size > OTHER_EVENT_MAX_CUSTOM_KINDS_PER_ACCOUNT) {
+          await client.query('ROLLBACK');
+          return NextResponse.json(
+            {
+              error: `too many distinct custom event kinds; account limit is ${OTHER_EVENT_MAX_CUSTOM_KINDS_PER_ACCOUNT}`,
+            },
+            { status: 400 },
+          );
+        }
+      }
+
+      for (const e of payload.otherEvents) {
+        await client.query(
+          `INSERT INTO other_events (
+             ride_uuid, event_uuid, user_id, timestamp,
+             latitude, longitude, kind, is_custom, is_public_eligible
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            payload.id,
+            e.id,
+            userId,
+            e.timestamp,
+            e.latitude,
+            e.longitude,
+            e.kind,
+            e.isCustom,
+            isPublicEligible(e.kind, e.isCustom),
+          ],
+        );
+      }
+      await client.query(
+        'UPDATE rides SET other_events_supported = TRUE WHERE ride_uuid = $1',
         [payload.id],
       );
     }

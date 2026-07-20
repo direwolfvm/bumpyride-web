@@ -186,6 +186,9 @@ export const rides = pgTable(
     // close calls for legacy rides — pre-v1.3 rides stay supported=FALSE
     // forever.
     closeCallsSupported: boolean('close_calls_supported').notNull().default(false),
+    // FALSE until iOS has uploaded a (possibly empty) otherEvents
+    // array (iOS v2.0). Same three-state semantics as closeCalls.
+    otherEventsSupported: boolean('other_events_supported').notNull().default(false),
   },
   (t) => ({
     userIdx: index('rides_user_id_idx').on(t.userId, t.startedAt.desc()),
@@ -259,6 +262,41 @@ export const closeCallEvents = pgTable(
   (t) => ({
     pk: primaryKey({ columns: [t.rideUuid, t.eventUuid] }),
     rideTsIdx: index('close_call_events_ride_ts_idx').on(t.rideUuid, t.timestamp),
+  }),
+);
+
+// iOS v2.0 "other events" — rider-logged point events beyond close
+// calls (Blocked Lane + rider-defined custom kinds). Privacy split:
+//   isCustom            — the client's wire value, stored verbatim so
+//                         upload → restore round-trips untouched.
+//   isPublicEligible    — server-computed at ingest (built-in registry
+//                         membership ∧ NOT isCustom). The ONLY flag
+//                         public / cross-account surfaces may filter
+//                         on; registry skew degrades toward privacy.
+//   userId              — denormalized from rides for the privacy
+//                         filter. Deleted (not transferred) when
+//                         rides are orphaned to an anonymized user.
+// See bumpy-ride/docs/OTHER_EVENTS_WEB_HANDOFF.md.
+export const otherEvents = pgTable(
+  'other_events',
+  {
+    rideUuid: uuid('ride_uuid')
+      .notNull()
+      .references(() => rides.rideUuid, { onDelete: 'cascade' }),
+    eventUuid: uuid('event_uuid').notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
+    latitude: doublePrecision('latitude').notNull(),
+    longitude: doublePrecision('longitude').notNull(),
+    kind: text('kind').notNull(),
+    isCustom: boolean('is_custom').notNull(),
+    isPublicEligible: boolean('is_public_eligible').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.rideUuid, t.eventUuid] }),
+    rideTsIdx: index('other_events_ride_ts_idx').on(t.rideUuid, t.timestamp),
   }),
 );
 

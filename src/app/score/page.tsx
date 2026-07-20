@@ -3,7 +3,11 @@ import { redirect } from 'next/navigation';
 import { eq, sql } from 'drizzle-orm';
 import { auth } from '@/auth';
 import { db } from '@/db';
-import { rides, userScores, users } from '@/db/schema';
+import { achievementEvents, rides, userScores, users } from '@/db/schema';
+import {
+  MILESTONE_ACHIEVEMENTS,
+  PER_RIDE_ACHIEVEMENTS,
+} from '@/lib/achievements';
 import { formatDistance, formatDuration } from '@/lib/formatters';
 import { LEVELS, levelFor } from '@/lib/levels';
 
@@ -18,7 +22,7 @@ export default async function ScorePage() {
   if (!session?.user?.id) redirect('/login?next=%2Fscore');
   const userId = session.user.id;
 
-  const [user, score, ridesAgg] = await Promise.all([
+  const [user, score, ridesAgg, achievementRows] = await Promise.all([
     db.query.users.findFirst({
       where: eq(users.id, userId),
       columns: { shareToPublicMap: true },
@@ -41,16 +45,33 @@ export default async function ScorePage() {
       })
       .from(rides)
       .where(eq(rides.userId, userId)),
+    // Per-achievement rollup for the achievements section.
+    db
+      .select({
+        achievementId: achievementEvents.achievementId,
+        count: sql<number>`COUNT(*)::int`,
+        points: sql<number>`SUM(${achievementEvents.points})::int`,
+      })
+      .from(achievementEvents)
+      .where(eq(achievementEvents.userId, userId))
+      .groupBy(achievementEvents.achievementId),
   ]);
 
   if (!user) redirect('/login');
 
   const totalPoints = Number(score?.totalPoints ?? 0);
+  const achievementPoints = Number(score?.achievementPoints ?? 0);
+  const combinedPoints = totalPoints + achievementPoints;
   const firstEver = score?.firstEverCount ?? 0;
   const firstForYou = score?.firstUserCount ?? 0;
   const staleRefresh = score?.staleRefreshCount ?? 0;
   const repeat = score?.repeatCount ?? 0;
-  const { level, nextThreshold, progress } = levelFor(totalPoints);
+  // Level runs on the combined total (discovery + achievements).
+  const { level, nextThreshold, progress } = levelFor(combinedPoints);
+
+  const earnedById = new Map(
+    achievementRows.map((r) => [r.achievementId, { count: r.count, points: r.points }]),
+  );
 
   const rideCount = Number(ridesAgg[0]?.rideCount ?? 0);
   const totalDistanceM = Number(ridesAgg[0]?.totalDistanceM ?? 0);
@@ -102,7 +123,14 @@ export default async function ScorePage() {
                 {level.name}
               </h2>
               <span className="text-sm tabular-nums text-text-muted">
-                {totalPoints.toLocaleString()} pts
+                {combinedPoints.toLocaleString()} pts
+                {achievementPoints > 0 && (
+                  <span className="text-text-dim">
+                    {' '}
+                    ({totalPoints.toLocaleString()} discovery +{' '}
+                    {achievementPoints.toLocaleString()} achievements)
+                  </span>
+                )}
               </span>
             </div>
             {nextThreshold !== null ? (
@@ -120,7 +148,7 @@ export default async function ScorePage() {
                   />
                 </div>
                 <div className="mt-2 text-xs text-text-muted">
-                  {(nextThreshold - totalPoints).toLocaleString()} pts to
+                  {(nextThreshold - combinedPoints).toLocaleString()} pts to
                   the next level ({LEVELS[level.index]?.name}).
                 </div>
               </>
@@ -162,6 +190,69 @@ export default async function ScorePage() {
               perCell="1 pt"
             />
           </section>
+
+          <section className="mt-8">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-sm font-medium uppercase tracking-wide text-text-muted">
+                Achievements
+              </h2>
+              <span className="text-sm tabular-nums text-text-muted">
+                {achievementPoints.toLocaleString()} pts
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-text-muted">
+              Per-ride achievements can be earned again on every
+              qualifying ride; milestones are one-time rungs on
+              lifetime ladders. Tiers pay 100, 200, or 400 points.
+            </p>
+            <div className="mt-3 overflow-hidden rounded-lg border border-border bg-surface">
+              {[...PER_RIDE_ACHIEVEMENTS.map((a) => ({
+                id: a.id,
+                name: a.name,
+                description: a.description,
+                repeatable: true,
+              })), ...MILESTONE_ACHIEVEMENTS.map((a) => ({
+                id: a.id,
+                name: a.name,
+                description: a.description,
+                repeatable: false,
+              }))].map((a) => {
+                const earned = earnedById.get(a.id);
+                return (
+                  <div
+                    key={a.id}
+                    className={`flex items-baseline justify-between gap-3 border-b border-border px-4 py-2.5 last:border-b-0 ${
+                      earned ? '' : 'opacity-50'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-baseline gap-2">
+                        <span className="font-medium">{a.name}</span>
+                        <span className="text-[10px] uppercase tracking-wide text-text-dim">
+                          {a.repeatable ? 'per ride' : 'milestone'}
+                        </span>
+                      </div>
+                      <div className="truncate text-xs text-text-muted">
+                        {a.description}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right font-mono text-sm tabular-nums">
+                      {earned ? (
+                        <>
+                          <span>{earned.count}×</span>{' '}
+                          <span className="text-text-muted">
+                            {earned.points.toLocaleString()} pts
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-text-dim">—</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         </>
       )}
 
@@ -195,9 +286,17 @@ export default async function ScorePage() {
             your personal map but don&apos;t earn points.
           </li>
           <li>
-            Turning public sharing off resets your score to zero. Turning
-            it back on backfills from every eligible ride you&apos;ve ever
-            synced.
+            <strong className="text-text">Achievements</strong> — 100 /
+            200 / 400-point bonuses for notable rides (distance,
+            endurance, exploration, surface finds, safety reporting) and
+            lifetime milestones. They add to your total and count toward
+            your level; for a typical rider they land around 10% of the
+            overall score.
+          </li>
+          <li>
+            Turning public sharing off resets your score to zero —
+            achievements included. Turning it back on backfills both
+            from every eligible ride you&apos;ve ever synced.
           </li>
         </ul>
       </section>

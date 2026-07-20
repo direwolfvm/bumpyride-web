@@ -8,6 +8,13 @@ import {
   isPublicEligible,
   OTHER_EVENT_MAX_CUSTOM_KINDS_PER_ACCOUNT,
 } from '@/lib/other-events';
+import {
+  awardMilestones,
+  awardRideAchievements,
+  HIGH_BUMP_G,
+  refreshAchievementPoints,
+  type Award,
+} from '@/lib/achievements';
 import { recomputeRideScore } from '@/lib/scoring';
 import { lookupTokenUser, parseBearer } from '@/lib/tokens';
 
@@ -554,6 +561,63 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Achievements. Per-ride awards are wiped + re-evaluated with
+    // the ride (idempotent, ride-stat-driven); milestone rungs are
+    // checked against the account's cumulative aggregates. Newly
+    // earned awards ride back on the response so iOS can toast them.
+    let achievementsAwarded: Award[] = [];
+    {
+      const startedAt = new Date(payload.startedAt);
+      let stats = null;
+      if (willBeInPublic) {
+        // Event counts come from the DB (not the payload) so null
+        // arrays — "leave prior rows alone" — count what's stored.
+        const [scoreAgg, counts] = await Promise.all([
+          client.query<{ new_cells: string; revisits: string; ride_points: string }>(
+            `SELECT
+               COUNT(*) FILTER (WHERE points IN (10, 5)) AS new_cells,
+               COUNT(*) FILTER (WHERE points IN (1, 3))  AS revisits,
+               COALESCE(SUM(points), 0)                  AS ride_points
+             FROM score_events WHERE ride_uuid = $1`,
+            [payload.id],
+          ),
+          client.query<{ close_calls: string; blocked_lanes: string }>(
+            `SELECT
+               (SELECT COUNT(*) FROM close_call_events WHERE ride_uuid = $1) AS close_calls,
+               (SELECT COUNT(*) FROM other_events
+                 WHERE ride_uuid = $1 AND is_public_eligible AND kind = 'blocked-lane') AS blocked_lanes`,
+            [payload.id],
+          ),
+        ]);
+        const durationMin =
+          (new Date(payload.endedAt).getTime() - startedAt.getTime()) / 60000;
+        stats = {
+          distanceMi: distanceM / 1609.344,
+          durationMin,
+          newCells: Number(scoreAgg.rows[0]?.new_cells ?? 0),
+          revisits: Number(scoreAgg.rows[0]?.revisits ?? 0),
+          ridePoints: Number(scoreAgg.rows[0]?.ride_points ?? 0),
+          highBumpSamples: payload.points.filter((p) => p.bumpiness >= HIGH_BUMP_G).length,
+          maxBump: maxBumpiness,
+          avgBump: avgBumpiness,
+          closeCalls: Number(counts.rows[0]?.close_calls ?? 0),
+          blockedLanes: Number(counts.rows[0]?.blocked_lanes ?? 0),
+        };
+      }
+      const rideAwards = await awardRideAchievements(
+        client,
+        userId,
+        payload.id,
+        startedAt,
+        stats,
+      );
+      const milestoneAwards = willBeInPublic
+        ? await awardMilestones(client, userId, startedAt)
+        : [];
+      achievementsAwarded = [...rideAwards, ...milestoneAwards];
+      await refreshAchievementPoints(client, userId);
+    }
+
     await client.query('COMMIT');
 
     return NextResponse.json({
@@ -563,6 +627,7 @@ export async function POST(req: NextRequest) {
       distanceM,
       avgBumpiness,
       maxBumpiness,
+      achievementsAwarded,
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});

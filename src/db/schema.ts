@@ -375,8 +375,39 @@ export const userScores = pgTable('user_scores', {
   // (see src/lib/scoring.ts). 3 pts each.
   staleRefreshCount: integer('stale_refresh_count').notNull().default(0),
   repeatCount: integer('repeat_count').notNull().default(0),
+  // Sum of achievement_events.points for the user. Separate from
+  // totalPoints (discovery) so both surfaces can be shown; the level
+  // ladder runs on the combined total.
+  achievementPoints: bigint('achievement_points', { mode: 'number' }).notNull().default(0),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Achievement awards. ride_uuid set = repeatable per-ride award
+// (wiped + re-awarded with the ride, like score_events); ride_uuid
+// NULL = one-time milestone rung (monotonic, never revoked). Registry
+// + thresholds in src/lib/achievements.ts.
+export const achievementEvents = pgTable(
+  'achievement_events',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    rideUuid: uuid('ride_uuid').references(() => rides.rideUuid, {
+      onDelete: 'cascade',
+    }),
+    achievementId: text('achievement_id').notNull(),
+    points: integer('points').notNull(),
+    threshold: doublePrecision('threshold').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    userCreatedIdx: index('achievement_events_user_created_idx').on(
+      t.userId,
+      t.createdAt.desc(),
+    ),
+  }),
+);
 
 // Distinct (cell, user) pairs for cells the user is actively
 // contributing to (sharing on, mounted-or-legacy ride). Drives the

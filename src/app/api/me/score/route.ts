@@ -56,16 +56,24 @@ export async function GET(req: NextRequest) {
   });
 
   const totalPoints = Number(score?.totalPoints ?? 0);
+  const achievementPoints = Number(score?.achievementPoints ?? 0);
+  // The level ladder runs on the COMBINED total: discovery points +
+  // achievement points. totalPoints stays discovery-only for
+  // backward compatibility with existing iOS parsing; combinedPoints
+  // is additive. See bumpy-ride/docs/ACHIEVEMENTS_IOS_HANDOFF.md.
+  const combinedPoints = totalPoints + achievementPoints;
   const breakdown = {
     firstEver: score?.firstEverCount ?? 0,
     firstForYou: score?.firstUserCount ?? 0,
     staleRefresh: score?.staleRefreshCount ?? 0,
     repeat: score?.repeatCount ?? 0,
   };
-  const { level, nextThreshold, progress } = levelFor(totalPoints);
+  const { level, nextThreshold, progress } = levelFor(combinedPoints);
 
   return NextResponse.json({
     totalPoints,
+    achievementPoints,
+    combinedPoints,
     breakdown,
     level: {
       index: level.index,

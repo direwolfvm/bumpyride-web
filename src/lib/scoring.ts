@@ -1,4 +1,8 @@
 import type { PoolClient } from 'pg';
+import {
+  backfillUserAchievements,
+  wipeUserAchievements,
+} from '@/lib/achievements';
 import { CELL_LAT_DEG, CELL_LON_DEG } from '@/lib/bump-grid';
 
 // Cell-discovery scoring primitives. Called from the ride-sync
@@ -47,6 +51,8 @@ export async function wipeUserScores(
   userId: string,
 ): Promise<void> {
   await client.query('DELETE FROM score_events WHERE user_id = $1', [userId]);
+  // Achievements share the score lifecycle — opting out resets both.
+  await wipeUserAchievements(client, userId);
   await refreshUserScoreCache(client, userId);
 }
 
@@ -225,6 +231,9 @@ export async function backfillUserScores(
     [userId],
   );
 
+  // Achievements read score_events (new-cell / revisit / ride-point
+  // stats), so they backfill AFTER the score rows are in place.
+  await backfillUserAchievements(client, userId);
   await refreshUserScoreCache(client, userId);
 }
 

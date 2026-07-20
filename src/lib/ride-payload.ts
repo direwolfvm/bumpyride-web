@@ -1,6 +1,12 @@
 import { and, asc, eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { brakeEvents, closeCallEvents, ridePoints, rides } from '@/db/schema';
+import {
+  brakeEvents,
+  closeCallEvents,
+  otherEvents,
+  ridePoints,
+  rides,
+} from '@/db/schema';
 
 // Shared ride-payload builder. Used by /api/me/rides/[ride]/export
 // (which adds a `derived` block with server-side stats) and by
@@ -49,6 +55,16 @@ export type RideExportPayload = {
         longitude: number;
       }>
     | null;
+  otherEvents:
+    | Array<{
+        id: string;
+        timestamp: string;
+        latitude: number;
+        longitude: number;
+        kind: string;
+        isCustom: boolean;
+      }>
+    | null;
 };
 
 export type RideExportDerived = {
@@ -77,7 +93,7 @@ export async function loadRideExport(
   });
   if (!ride) return null;
 
-  const [points, brakes, closeCalls] = await Promise.all([
+  const [points, brakes, closeCalls, others] = await Promise.all([
     db
       .select({
         id: ridePoints.pointUuid,
@@ -114,6 +130,18 @@ export async function loadRideExport(
       .from(closeCallEvents)
       .where(eq(closeCallEvents.rideUuid, rideUuid))
       .orderBy(asc(closeCallEvents.timestamp)),
+    db
+      .select({
+        id: otherEvents.eventUuid,
+        timestamp: otherEvents.timestamp,
+        latitude: otherEvents.latitude,
+        longitude: otherEvents.longitude,
+        kind: otherEvents.kind,
+        isCustom: otherEvents.isCustom,
+      })
+      .from(otherEvents)
+      .where(eq(otherEvents.rideUuid, rideUuid))
+      .orderBy(asc(otherEvents.timestamp)),
   ]);
 
   const payload: RideExportPayload = {
@@ -149,6 +177,19 @@ export async function loadRideExport(
           timestamp: c.timestamp.toISOString(),
           latitude: c.latitude,
           longitude: c.longitude,
+        }))
+      : null,
+    // isCustom is the wire value the client sent, NOT the server's
+    // privacy routing flag — restore must hand back exactly what was
+    // uploaded (registry skew included).
+    otherEvents: ride.otherEventsSupported
+      ? others.map((o) => ({
+          id: o.id,
+          timestamp: o.timestamp.toISOString(),
+          latitude: o.latitude,
+          longitude: o.longitude,
+          kind: o.kind,
+          isCustom: o.isCustom,
         }))
       : null,
   };

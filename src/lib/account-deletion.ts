@@ -66,6 +66,14 @@ async function orphanUserRides(
   userId: string,
 ): Promise<{ anonUserId: string; rides: number; contributors: number }> {
   const anonId = await mintAnonymizedUser(client);
+  // Rider-logged "other events" are private to the owning account
+  // (including custom kinds — free-text labels the rider defined).
+  // They do NOT transfer to the anonymized orphan: delete them
+  // before the ride reassignment so the denormalized user_id never
+  // points across the ownership change. The ride shells keep
+  // other_events_supported = TRUE with zero rows, which is fine —
+  // anonymized users have no restore path.
+  await client.query('DELETE FROM other_events WHERE user_id = $1', [userId]);
   const rides = await client.query<{ ride_uuid: string }>(
     'UPDATE rides SET user_id = $2 WHERE user_id = $1 RETURNING ride_uuid',
     [userId, anonId],

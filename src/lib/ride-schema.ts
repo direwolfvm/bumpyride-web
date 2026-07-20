@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OTHER_EVENT_KIND_MAX_CHARS } from '@/lib/other-events';
 
 // Mirrors bumpy-ride/BumpyRide/docs/SCHEMA.md. We accept the exact JSON the
 // iOS app writes to disk; this validator is the trust boundary.
@@ -59,6 +60,20 @@ export const closeCallEventSchema = z.object({
   longitude: z.number().min(-180).max(180).pipe(finite),
 });
 
+// iOS v2.0 "other event". User-initiated (tap "Log Event" during
+// recording, pick a kind). `kind` is a registry identifier for
+// built-ins or the rider's label verbatim for customs; `isCustom` is
+// the privacy switch. Additive on schemaVersion 3 — no version bump.
+// See bumpy-ride/docs/OTHER_EVENTS_WEB_HANDOFF.md.
+export const otherEventSchema = z.object({
+  id: z.string().uuid(),
+  timestamp: z.string().datetime({ offset: true }),
+  latitude: z.number().min(-90).max(90).pipe(finite),
+  longitude: z.number().min(-180).max(180).pipe(finite),
+  kind: z.string().min(1).max(OTHER_EVENT_KIND_MAX_CHARS),
+  isCustom: z.boolean(),
+});
+
 export const rideSchema = z.object({
   schemaVersion: z
     .number()
@@ -89,9 +104,17 @@ export const rideSchema = z.object({
   // true) plus the close_call_events row count. Unlike brake events,
   // iOS does NOT backfill legacy rides — pre-v1.3 rides stay null.
   closeCallEvents: z.array(closeCallEventSchema).nullish(),
+  // iOS v2.0, optional. Same three-state semantics as closeCallEvents:
+  //   - field omitted / null  -> ride predates the feature
+  //   - []                    -> feature available, nothing logged
+  //   - [ ... ]               -> the events
+  // Storage mirrors this via rides.other_events_supported plus the
+  // other_events row count.
+  otherEvents: z.array(otherEventSchema).nullish(),
 });
 
 export type RidePayload = z.infer<typeof rideSchema>;
 export type RidePointPayload = z.infer<typeof ridePointSchema>;
 export type BrakeEventPayload = z.infer<typeof brakeEventSchema>;
 export type CloseCallEventPayload = z.infer<typeof closeCallEventSchema>;
+export type OtherEventPayload = z.infer<typeof otherEventSchema>;

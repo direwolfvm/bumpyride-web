@@ -45,6 +45,7 @@ export type RideExportPayload = {
         longitude: number;
         peakDecelerationMPS2: number;
         durationSeconds: number;
+        category?: string;
       }>
     | null;
   closeCallEvents:
@@ -53,6 +54,7 @@ export type RideExportPayload = {
         timestamp: string;
         latitude: number;
         longitude: number;
+        category?: string;
       }>
     | null;
   otherEvents:
@@ -65,6 +67,10 @@ export type RideExportPayload = {
         isCustom: boolean;
       }>
     | null;
+  // iOS v1.5, device-local Apple Health workout id. Opaque round-trip
+  // value — omitted (not null) when the upload didn't carry it, same
+  // as horizontalAccel on points.
+  healthKitWorkoutUUID?: string;
 };
 
 export type RideExportDerived = {
@@ -116,6 +122,7 @@ export async function loadRideExport(
         longitude: brakeEvents.longitude,
         peakDecelerationMPS2: brakeEvents.peakDecelerationMps2,
         durationSeconds: brakeEvents.durationSeconds,
+        category: brakeEvents.category,
       })
       .from(brakeEvents)
       .where(eq(brakeEvents.rideUuid, rideUuid))
@@ -126,6 +133,7 @@ export async function loadRideExport(
         timestamp: closeCallEvents.timestamp,
         latitude: closeCallEvents.latitude,
         longitude: closeCallEvents.longitude,
+        category: closeCallEvents.category,
       })
       .from(closeCallEvents)
       .where(eq(closeCallEvents.rideUuid, rideUuid))
@@ -151,6 +159,9 @@ export async function loadRideExport(
     startedAt: ride.startedAt.toISOString(),
     endedAt: ride.endedAt.toISOString(),
     pocketMode: ride.pocketMode,
+    ...(ride.healthkitWorkoutUuid !== null
+      ? { healthKitWorkoutUUID: ride.healthkitWorkoutUuid }
+      : {}),
     points: points.map((p) => ({
       id: p.id,
       timestamp: p.timestamp.toISOString(),
@@ -169,6 +180,7 @@ export async function loadRideExport(
           longitude: b.longitude,
           peakDecelerationMPS2: b.peakDecelerationMPS2,
           durationSeconds: b.durationSeconds,
+          ...(b.category !== null ? { category: b.category } : {}),
         }))
       : null,
     closeCallEvents: ride.closeCallsSupported
@@ -177,6 +189,7 @@ export async function loadRideExport(
           timestamp: c.timestamp.toISOString(),
           latitude: c.latitude,
           longitude: c.longitude,
+          ...(c.category !== null ? { category: c.category } : {}),
         }))
       : null,
     // isCustom is the wire value the client sent, NOT the server's

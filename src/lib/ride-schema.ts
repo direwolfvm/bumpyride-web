@@ -19,9 +19,21 @@ import { OTHER_EVENT_KIND_MAX_CHARS } from '@/lib/other-events';
 //     keep sending v2 and we keep accepting them. See
 //     bumpyride/docs/BRAKES_WEB_HANDOFF.md.
 // See bumpyride/docs/SCHEMA.md for the v1/v2/v3 comparison.
+//
+// Additive fields ride on v3 without a schemaVersion bump (SCHEMA.md
+// "Additive fields since v3"): Ride.healthKitWorkoutUUID (iOS v1.5)
+// and BrakeEvent/CloseCall.category (iOS v1.7). All are round-trip
+// only — we store and re-emit them, never interpret them.
 export const SUPPORTED_SCHEMA_VERSIONS = [1, 2, 3] as const;
 
 const finite = z.number().refine(Number.isFinite, { message: 'must be finite' });
+
+// User-supplied classification tag (BrakeEvent / CloseCall, iOS v1.7).
+// Deliberately NOT z.enum of today's cases: SCHEMA.md says new enum
+// cases may appear without a schemaVersion bump and consumers must
+// tolerate them, so we accept any bounded string and round-trip it
+// verbatim. The 32-char cap mirrors the DB CHECK (migration 0019).
+const eventCategory = z.string().min(1).max(32);
 
 export const ridePointSchema = z.object({
   id: z.string().uuid(),
@@ -48,16 +60,23 @@ export const brakeEventSchema = z.object({
   longitude: z.number().min(-180).max(180).pipe(finite),
   peakDecelerationMPS2: z.number().min(0).pipe(finite),
   durationSeconds: z.number().min(0).pipe(finite),
+  // iOS v1.7: safety | other | error | unknown (open set, see
+  // eventCategory). Null/missing on legacy events and on events whose
+  // categorization modal timed out untouched.
+  category: eventCategory.nullish(),
 });
 
 // v3 close-call event. User-initiated (tap "Log Close Call" while
-// recording). Intentionally minimal — no severity, category, or notes.
-// See bumpyride/docs/CLOSE_CALLS_WEB_HANDOFF.md.
+// recording). Minimal by design — no severity or notes; a category
+// tag arrived in iOS v1.7. See bumpyride/docs/CLOSE_CALLS_WEB_HANDOFF.md.
 export const closeCallEventSchema = z.object({
   id: z.string().uuid(),
   timestamp: z.string().datetime({ offset: true }),
   latitude: z.number().min(-90).max(90).pipe(finite),
   longitude: z.number().min(-180).max(180).pipe(finite),
+  // iOS v1.7: vehicle | bike | pedestrian (open set, see
+  // eventCategory). Null/missing on pre-v1.7 close calls.
+  category: eventCategory.nullish(),
 });
 
 // iOS v2.0 "other event". User-initiated (tap "Log Event" during
@@ -111,6 +130,12 @@ export const rideSchema = z.object({
   // Storage mirrors this via rides.other_events_supported plus the
   // other_events row count.
   otherEvents: z.array(otherEventSchema).nullish(),
+  // iOS v1.5, optional. Device-local UUID of the HKWorkout this ride
+  // was exported to in Apple Health. Meaningless to us and to any
+  // other device — SCHEMA.md: "round-trip it on storage but do not
+  // interpret". Stored as-is (TEXT column) so the exact string,
+  // including iOS's uppercase hex, survives upload -> restore.
+  healthKitWorkoutUUID: z.string().uuid().nullish(),
 });
 
 export type RidePayload = z.infer<typeof rideSchema>;

@@ -209,6 +209,7 @@ export async function POST(req: NextRequest) {
            max_bumpiness = $9,
            avg_bumpiness = $10,
            content_hash = $11,
+           healthkit_workout_uuid = $12,
            updated_at = now()
          WHERE ride_uuid = $1`,
         [
@@ -223,6 +224,7 @@ export async function POST(req: NextRequest) {
           maxBumpiness,
           avgBumpiness,
           contentHash,
+          payload.healthKitWorkoutUUID ?? null,
         ],
       );
     } else {
@@ -230,8 +232,8 @@ export async function POST(req: NextRequest) {
         `INSERT INTO rides (
            ride_uuid, user_id, title, started_at, ended_at, pocket_mode,
            schema_version, point_count, distance_m, max_bumpiness, avg_bumpiness,
-           content_hash
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+           content_hash, healthkit_workout_uuid
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [
           payload.id,
           userId,
@@ -245,6 +247,7 @@ export async function POST(req: NextRequest) {
           maxBumpiness,
           avgBumpiness,
           contentHash,
+          payload.healthKitWorkoutUUID ?? null,
         ],
       );
     }
@@ -293,8 +296,8 @@ export async function POST(req: NextRequest) {
           `INSERT INTO brake_events (
              ride_uuid, event_uuid, timestamp,
              latitude, longitude,
-             peak_deceleration_mps2, duration_seconds
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+             peak_deceleration_mps2, duration_seconds, category
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
             payload.id,
             e.id,
@@ -303,6 +306,7 @@ export async function POST(req: NextRequest) {
             e.longitude,
             e.peakDecelerationMPS2,
             e.durationSeconds,
+            e.category ?? null,
           ],
         );
       }
@@ -333,9 +337,16 @@ export async function POST(req: NextRequest) {
       for (const e of payload.closeCallEvents) {
         await client.query(
           `INSERT INTO close_call_events (
-             ride_uuid, event_uuid, timestamp, latitude, longitude
-           ) VALUES ($1, $2, $3, $4, $5)`,
-          [payload.id, e.id, e.timestamp, e.latitude, e.longitude],
+             ride_uuid, event_uuid, timestamp, latitude, longitude, category
+           ) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            payload.id,
+            e.id,
+            e.timestamp,
+            e.latitude,
+            e.longitude,
+            e.category ?? null,
+          ],
         );
       }
       await client.query(

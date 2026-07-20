@@ -189,6 +189,12 @@ export const rides = pgTable(
     // FALSE until iOS has uploaded a (possibly empty) otherEvents
     // array (iOS v2.0). Same three-state semantics as closeCalls.
     otherEventsSupported: boolean('other_events_supported').notNull().default(false),
+    // Device-local HKWorkout UUID (iOS v1.5) — set when the ride was
+    // exported to Apple Health on the uploading device. Opaque
+    // round-trip-only value; TEXT (not uuid) so the client's exact
+    // string, case included, comes back on restore. NULL = field
+    // omitted at upload.
+    healthkitWorkoutUuid: text('healthkit_workout_uuid'),
   },
   (t) => ({
     userIdx: index('rides_user_id_idx').on(t.userId, t.startedAt.desc()),
@@ -235,6 +241,10 @@ export const brakeEvents = pgTable(
     longitude: doublePrecision('longitude').notNull(),
     peakDecelerationMps2: doublePrecision('peak_deceleration_mps2').notNull(),
     durationSeconds: doublePrecision('duration_seconds').notNull(),
+    // iOS v1.7 user classification (safety/other/error/unknown today;
+    // an open set — new cases arrive without a schemaVersion bump).
+    // Round-trip only; NULL = legacy or never categorised.
+    category: text('category'),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.rideUuid, t.eventUuid] }),
@@ -243,10 +253,11 @@ export const brakeEvents = pgTable(
 );
 
 // User-initiated close-call markers. iOS users tap "Log Close Call"
-// during recording; the snapshot is just position + time. No severity
-// or category fields by design — anything richer was hostile to
-// one-handed in-ride interaction. Same key shape as brake_events so
-// the ride-detail page and any future aggregate joins can reuse the
+// during recording; the snapshot is position + time plus (since iOS
+// v1.7) an optional category tag picked in a post-tap modal. No
+// severity or notes — anything richer was hostile to one-handed
+// in-ride interaction. Same key shape as brake_events so the
+// ride-detail page and any future aggregate joins can reuse the
 // same access patterns.
 export const closeCallEvents = pgTable(
   'close_call_events',
@@ -258,6 +269,10 @@ export const closeCallEvents = pgTable(
     timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
     latitude: doublePrecision('latitude').notNull(),
     longitude: doublePrecision('longitude').notNull(),
+    // iOS v1.7 user classification (vehicle/bike/pedestrian today; an
+    // open set — new cases arrive without a schemaVersion bump).
+    // Round-trip only; NULL = pre-v1.7 close call.
+    category: text('category'),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.rideUuid, t.eventUuid] }),

@@ -3,7 +3,14 @@ import { and, asc, desc, eq, gt, lt, sql } from 'drizzle-orm';
 import Link from 'next/link';
 import { auth } from '@/auth';
 import { db } from '@/db';
-import { brakeEvents, closeCallEvents, ridePoints, rides, scoreEvents } from '@/db/schema';
+import {
+  brakeEvents,
+  closeCallEvents,
+  otherEvents,
+  ridePoints,
+  rides,
+  scoreEvents,
+} from '@/db/schema';
 import {
   formatDateTime,
   formatDistance,
@@ -12,6 +19,7 @@ import {
 } from '@/lib/formatters';
 import { BrakeEventsSection } from './BrakeEventsSection';
 import { CloseCallsSection } from './CloseCallsSection';
+import { OtherEventsSection } from './OtherEventsSection';
 import { RouteMap } from './RouteMap';
 import { BumpinessChart } from './BumpinessChart';
 import { RenameForm } from './RenameForm';
@@ -40,7 +48,15 @@ export default async function RideDetailPage({
   // the list is the *newer* ride. "Next" is the older ride. Same
   // mental model as paginating a list — Next goes to the next page,
   // which is further into the past.
-  const [points, brakeRows, closeCallRows, scoreAgg, prevRide, nextRide] = await Promise.all([
+  const [
+    points,
+    brakeRows,
+    closeCallRows,
+    otherEventRows,
+    scoreAgg,
+    prevRide,
+    nextRide,
+  ] = await Promise.all([
     db
       .select({
         latitude: ridePoints.latitude,
@@ -74,6 +90,19 @@ export default async function RideDetailPage({
       .from(closeCallEvents)
       .where(eq(closeCallEvents.rideUuid, rideUuid))
       .orderBy(asc(closeCallEvents.timestamp)),
+    db
+      .select({
+        eventUuid: otherEvents.eventUuid,
+        timestamp: otherEvents.timestamp,
+        latitude: otherEvents.latitude,
+        longitude: otherEvents.longitude,
+        kind: otherEvents.kind,
+        isCustom: otherEvents.isCustom,
+        isPublicEligible: otherEvents.isPublicEligible,
+      })
+      .from(otherEvents)
+      .where(eq(otherEvents.rideUuid, rideUuid))
+      .orderBy(asc(otherEvents.timestamp)),
     db
       .select({
         total: sql<number>`COALESCE(SUM(${scoreEvents.points}), 0)::int`,
@@ -149,6 +178,15 @@ export default async function RideDetailPage({
     lat: c.latitude,
     lon: c.longitude,
   }));
+  const loggedEvents = otherEventRows.map((o) => ({
+    id: o.eventUuid,
+    tSec: (o.timestamp.getTime() - startMs) / 1000,
+    lat: o.latitude,
+    lon: o.longitude,
+    kind: o.kind,
+    isCustom: o.isCustom,
+    isPublicEligible: o.isPublicEligible,
+  }));
 
   // Derived stats for the header grid. Avg speed is wall-clock
   // (distance / duration) — same as Strava et al. and includes time
@@ -176,6 +214,9 @@ export default async function RideDetailPage({
     : '—';
   const closeCallStat = ride.closeCallsSupported
     ? closeCalls.length.toLocaleString()
+    : '—';
+  const loggedEventStat = ride.otherEventsSupported
+    ? loggedEvents.length.toLocaleString()
     : '—';
 
   return (
@@ -222,6 +263,11 @@ export default async function RideDetailPage({
           hint={!ride.closeCallsSupported ? 'predates feature' : undefined}
         />
         <Stat
+          label="Logged events"
+          value={loggedEventStat}
+          hint={!ride.otherEventsSupported ? 'predates feature' : undefined}
+        />
+        <Stat
           label="Points earned"
           value={ridePointsEarned > 0 ? `+${ridePointsEarned.toLocaleString()}` : '—'}
           hint={ridePointsEarned === 0 ? 'sharing off' : 'cell discovery'}
@@ -254,6 +300,10 @@ export default async function RideDetailPage({
               lat: c.lat,
               lon: c.lon,
             }))}
+            otherEventMarkers={loggedEvents.map((o) => ({
+              lat: o.lat,
+              lon: o.lon,
+            }))}
           />
         ) : (
           <EmptyBox>No points were recorded.</EmptyBox>
@@ -279,6 +329,13 @@ export default async function RideDetailPage({
         <CloseCallsSection
           supported={ride.closeCallsSupported}
           events={closeCalls}
+        />
+      </Section>
+
+      <Section title="Logged events">
+        <OtherEventsSection
+          supported={ride.otherEventsSupported}
+          events={loggedEvents}
         />
       </Section>
 

@@ -75,14 +75,21 @@ export type CloseCallMarker = {
   lon: number;
 };
 
+export type OtherEventMarker = {
+  lat: number;
+  lon: number;
+};
+
 export function RouteMap({
   samples,
   brakeMarkers = [],
   closeCallMarkers = [],
+  otherEventMarkers = [],
 }: {
   samples: Sample[];
   brakeMarkers?: BrakeMarker[];
   closeCallMarkers?: CloseCallMarker[];
+  otherEventMarkers?: OtherEventMarker[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -151,6 +158,12 @@ export function RouteMap({
     const closeCallFeatures: GeoJSON.Feature<GeoJSON.Point>[] = closeCallMarkers.map((c) => ({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [c.lon, c.lat] },
+      properties: {},
+    }));
+
+    const otherEventFeatures: GeoJSON.Feature<GeoJSON.Point>[] = otherEventMarkers.map((o) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [o.lon, o.lat] },
       properties: {},
     }));
 
@@ -254,10 +267,44 @@ export function RouteMap({
           },
         });
       }
+
+      if (otherEventFeatures.length > 0) {
+        // Same halo + dot pattern, in the cyan the bump maps use for
+        // the "Event reports" layer. Smallest of the three markers —
+        // a logged event is a note, not an incident, so it shouldn't
+        // out-shout a hard brake or a close call sitting nearby.
+        map.addSource('other-events', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: otherEventFeatures },
+        });
+        map.addLayer({
+          id: 'other-events-halo',
+          type: 'circle',
+          source: 'other-events',
+          paint: {
+            'circle-radius': 8,
+            'circle-color': '#ffffff',
+            'circle-opacity': 0.9,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 1,
+          },
+        });
+        map.addLayer({
+          id: 'other-events',
+          type: 'circle',
+          source: 'other-events',
+          paint: {
+            'circle-radius': 4.5,
+            'circle-color': '#22d3ee',
+            'circle-stroke-color': '#0e7490',
+            'circle-stroke-width': 1.5,
+          },
+        });
+      }
     });
 
     return () => map.remove();
-  }, [samples, brakeMarkers, closeCallMarkers]);
+  }, [samples, brakeMarkers, closeCallMarkers, otherEventMarkers]);
 
   return (
     <div

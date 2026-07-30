@@ -71,6 +71,10 @@ export type RideExportPayload = {
   // value — omitted (not null) when the upload didn't carry it, same
   // as horizontalAccel on points.
   healthKitWorkoutUUID?: string;
+  // When the ride content was last user-edited (trim/split/rename) —
+  // stamped by iOS on upload or by the server on web edits. Omitted
+  // when the ride has never been edited. See RIDE_EDIT_WEB_HANDOFF.md.
+  editedAt?: string;
 };
 
 export type RideExportDerived = {
@@ -162,6 +166,7 @@ export async function loadRideExport(
     ...(ride.healthkitWorkoutUuid !== null
       ? { healthKitWorkoutUUID: ride.healthkitWorkoutUuid }
       : {}),
+    ...(ride.editedAt !== null ? { editedAt: ride.editedAt.toISOString() } : {}),
     points: points.map((p) => ({
       id: p.id,
       timestamp: p.timestamp.toISOString(),

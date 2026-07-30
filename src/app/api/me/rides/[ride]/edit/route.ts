@@ -77,9 +77,20 @@ function filterEvents(
 
 /**
  * Assemble one output ride from a slice of the source payload.
- * startedAt/endedAt move to the slice's first/last point timestamps,
- * and healthKitWorkoutUUID is dropped (the stored workout link
- * belongs to the pre-edit ride on the recording device).
+ *
+ * Carry-by-default: we SPREAD the loaded payload and override only the
+ * fields an edit must change. Listing fields explicitly here would make
+ * this a canonicalizer with a fixed field list — the exact shape of code
+ * that silently destroys additive fields (SCHEMA.md keeps adding them:
+ * healthKitWorkoutUUID, category, otherEvents, editedAt). Anything
+ * loadRideExport learns to return in future survives a trim/split for
+ * free; only the exceptions below need touching.
+ *
+ * Deliberate exceptions:
+ *   - startedAt/endedAt -> the slice's first/last point timestamps
+ *   - healthKitWorkoutUUID -> dropped; the Apple Health workout link
+ *     describes the pre-edit ride on the recording device
+ *   - editedAt -> not carried; the caller stamps a fresh value
  */
 function buildSlice(
   src: RideExportPayload,
@@ -90,13 +101,17 @@ function buildSlice(
     events: EventArrays;
   },
 ): RidePayload {
+  const {
+    healthKitWorkoutUUID: _clearedByEdit,
+    editedAt: _restampedByCaller,
+    ...carried
+  } = src;
   return {
-    schemaVersion: src.schemaVersion,
+    ...carried,
     id: args.id,
     title: args.title,
     startedAt: args.points[0].timestamp,
     endedAt: args.points[args.points.length - 1].timestamp,
-    pocketMode: src.pocketMode,
     points: args.points,
     ...args.events,
   };

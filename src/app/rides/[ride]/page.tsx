@@ -15,6 +15,7 @@ import { CloseCallsSection } from './CloseCallsSection';
 import { RouteMap } from './RouteMap';
 import { BumpinessChart } from './BumpinessChart';
 import { RenameForm } from './RenameForm';
+import { RideEditor } from './RideEditor';
 
 const G_MPS2 = 9.80665;
 
@@ -280,6 +281,15 @@ export default async function RideDetailPage({
           events={closeCalls}
         />
       </Section>
+
+      {samples.length >= 2 && (
+        <Section title="Edit">
+          <RideEditor
+            rideUuid={ride.rideUuid}
+            times={samples.map((s) => s.tSec)}
+          />
+        </Section>
+      )}
     </div>
   );
 }

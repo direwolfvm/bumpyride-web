@@ -195,6 +195,14 @@ export const rides = pgTable(
     // string, case included, comes back on restore. NULL = field
     // omitted at upload.
     healthkitWorkoutUuid: text('healthkit_workout_uuid'),
+    // When the ride's CONTENT was last edited by the user (trim,
+    // split, rename) — stamped by iOS on upload or by the server on
+    // web-side edits. NULL = never edited. Distinct from updated_at
+    // (any re-sync touches that). Drives the sync conflict rule: an
+    // incoming payload with an older editedAt (null = oldest) than
+    // the stored value is rejected 409 so a stale device copy can't
+    // clobber a fresher edit. See RIDE_EDIT_WEB_HANDOFF.md.
+    editedAt: timestamp('edited_at', { withTimezone: true }),
   },
   (t) => ({
     userIdx: index('rides_user_id_idx').on(t.userId, t.startedAt.desc()),

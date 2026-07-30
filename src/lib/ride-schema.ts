@@ -136,6 +136,12 @@ export const rideSchema = z.object({
   // interpret". Stored as-is (TEXT column) so the exact string,
   // including iOS's uppercase hex, survives upload -> restore.
   healthKitWorkoutUUID: z.string().uuid().nullish(),
+  // iOS v2.0, optional. Stamped by iOS on every user content edit
+  // (trim, split, rename); null/omitted = never edited. Stored,
+  // round-tripped on restore, and compared against the stored value
+  // on ingest — see RIDE_EDIT_WEB_HANDOFF.md's conflict rule. Values
+  // in the future relative to server time are clamped on ingest.
+  editedAt: z.string().datetime({ offset: true }).nullish(),
 });
 
 export type RidePayload = z.infer<typeof rideSchema>;

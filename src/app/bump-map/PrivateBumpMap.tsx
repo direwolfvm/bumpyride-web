@@ -23,6 +23,10 @@ import {
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
+import {
+  OTHER_EVENT_KIND_ALL,
+  otherEventKindLabel,
+} from '@/lib/other-event-tiles';
 
 // Personal bump map. Multi-layer model — any combination of layers
 // can be visible simultaneously, controlled by a floating legend
@@ -39,6 +43,8 @@ type VisibleLayers = {
   brakeEvents: boolean;
   closeCells: boolean;
   closeEvents: boolean;
+  otherCells: boolean;
+  otherEvents: boolean;
   halo: boolean;
 };
 
@@ -48,6 +54,8 @@ const DEFAULT_VISIBLE: VisibleLayers = {
   brakeEvents: false,
   closeCells: false,
   closeEvents: false,
+  otherCells: false,
+  otherEvents: false,
   halo: false,
 };
 
@@ -125,8 +133,10 @@ const INCIDENT_NORM_HELP: Record<IncidentNorm, string> = {
 const SRC_BUMPS = 'bumps';
 const SRC_BRAKE_CELLS = 'brake-cells';
 const SRC_CLOSE_CELLS = 'close-call-cells';
+const SRC_OTHER_CELLS = 'other-event-cells';
 const SRC_BRAKE_EVENTS = 'brake-events';
 const SRC_CLOSE_EVENTS = 'close-call-events';
+const SRC_OTHER_EVENTS = 'other-event-events';
 const SRC_HALO = 'coverage-halo';
 
 // localStorage keys. Migrated from the old `bumpmap.mode` key
@@ -187,10 +197,27 @@ function closeCallsTileUrl(
   return `/api/tiles/user/close-calls/{z}/{x}/{y}?${params.join('&')}`;
 }
 
-// Marker palette for the two event types. Brakes are deep red,
-// close calls are amber — visually distinct when both are layered.
+function otherEventsTileUrl(
+  rides: RidesFilter,
+  mode: TileMode,
+  percentile: TilePercentile,
+  norm: IncidentNorm,
+  kind: string,
+): string {
+  const params: string[] = [`rides=${rides}`];
+  if (mode !== 'all') params.push(`mode=${mode}`);
+  if (percentile !== 'all') params.push(`percentile=${percentile}`);
+  if (norm !== 'raw') params.push(`norm=${norm}`);
+  if (kind !== OTHER_EVENT_KIND_ALL) params.push(`kind=${encodeURIComponent(kind)}`);
+  return `/api/tiles/user/other-events/{z}/{x}/{y}?${params.join('&')}`;
+}
+
+// Marker palette for the three event types. Brakes are deep red,
+// close calls amber, logged event reports cyan — visually distinct
+// when layered together.
 const BRAKE_MARKER_COLOR = '#dc2626';
 const CLOSE_CALL_MARKER_COLOR = '#f59e0b';
+const OTHER_EVENT_MARKER_COLOR = '#22d3ee';
 
 // Circle-paint expression shared by both event layers. Only the
 // color differs.
@@ -233,16 +260,49 @@ export function PrivateBumpMap({
   const [metric, setMetric] = useState<IncidentMetric>('count');
   const [norm, setNorm] = useState<IncidentNorm>('raw');
 
+  const [kind, setKind] = useState<string>(OTHER_EVENT_KIND_ALL);
+  // The rider's own kinds, including their custom labels — fetched
+  // rather than derived from the registry, since custom labels are
+  // per-account. Populates the kind picker.
+  const [ownKinds, setOwnKinds] = useState<
+    ReadonlyArray<{ kind: string; isCustom: boolean; count: number }>
+  >([]);
+
   // Event counts shown in caption when those layers are visible.
   const [brakeEventsCount, setBrakeEventsCount] = useState<number | null>(null);
   const [brakeEventsTruncated, setBrakeEventsTruncated] = useState(false);
   const [closeEventsCount, setCloseEventsCount] = useState<number | null>(null);
   const [closeEventsTruncated, setCloseEventsTruncated] = useState(false);
+  const [otherEventsCount, setOtherEventsCount] = useState<number | null>(null);
+  const [otherEventsTruncated, setOtherEventsTruncated] = useState(false);
 
   // SSR-safe rides hydration on mount.
   useEffect(() => {
     setRides(readStoredRides());
   }, []);
+
+  // Load the rider's logged event kinds once — only needed when an
+  // other-events layer is switched on.
+  const wantsKinds = visible.otherCells || visible.otherEvents;
+  useEffect(() => {
+    if (!wantsKinds || ownKinds.length > 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/me/other-events/kinds');
+        if (cancelled || !res.ok) return;
+        const json = (await res.json()) as {
+          kinds: Array<{ kind: string; isCustom: boolean; count: number }>;
+        };
+        if (!cancelled) setOwnKinds(json.kinds);
+      } catch (err) {
+        if (!cancelled) console.error('event kinds fetch failed', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [wantsKinds, ownKinds.length]);
 
   function selectRides(next: RidesFilter) {
     setRides(next);
@@ -299,6 +359,14 @@ export function PrivateBumpMap({
       });
       map.addLayer({ id: SRC_CLOSE_CELLS, type: 'raster', source: SRC_CLOSE_CELLS, layout: { visibility: 'none' } });
 
+      map.addSource(SRC_OTHER_CELLS, {
+        type: 'raster',
+        tiles: [otherEventsTileUrl(rides, mode, percentile, norm, kind)],
+        tileSize: 256,
+        attribution: 'Your logged events',
+      });
+      map.addLayer({ id: SRC_OTHER_CELLS, type: 'raster', source: SRC_OTHER_CELLS, layout: { visibility: 'none' } });
+
       // Coverage halo backdrop — translucent purple halo over every
       // cell the user has visited. Independent toggle so the user
       // can pull it up for context any time.
@@ -340,6 +408,18 @@ export function PrivateBumpMap({
         layout: { visibility: 'none' },
         paint: markerPaint(CLOSE_CALL_MARKER_COLOR),
       });
+
+      map.addSource(SRC_OTHER_EVENTS, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer({
+        id: SRC_OTHER_EVENTS,
+        type: 'circle',
+        source: SRC_OTHER_EVENTS,
+        layout: { visibility: 'none' },
+        paint: markerPaint(OTHER_EVENT_MARKER_COLOR),
+      });
     });
 
     return () => {
@@ -364,8 +444,10 @@ export function PrivateBumpMap({
       setVis(SRC_BUMPS, visible.bumps);
       setVis(SRC_BRAKE_CELLS, visible.brakeCells);
       setVis(SRC_CLOSE_CELLS, visible.closeCells);
+      setVis(SRC_OTHER_CELLS, visible.otherCells);
       setVis(SRC_BRAKE_EVENTS, visible.brakeEvents);
       setVis(SRC_CLOSE_EVENTS, visible.closeEvents);
+      setVis(SRC_OTHER_EVENTS, visible.otherEvents);
       setVis(SRC_HALO, visible.halo);
     };
     if (map.isStyleLoaded()) apply();
@@ -386,13 +468,14 @@ export function PrivateBumpMap({
       setTiles(SRC_BUMPS, bumpsTileUrl(rides, mode, percentile, bumpAgg));
       setTiles(SRC_BRAKE_CELLS, brakesTileUrl(rides, mode, percentile, metric, norm));
       setTiles(SRC_CLOSE_CELLS, closeCallsTileUrl(rides, mode, percentile, norm));
+      setTiles(SRC_OTHER_CELLS, otherEventsTileUrl(rides, mode, percentile, norm, kind));
       // Halo URL ignores percentile + agg by design — it's a "where
       // have I been" backdrop, scoped only by rides + time window.
       setTiles(SRC_HALO, bumpsTileUrl(rides, mode, 'all', 'avg', 'halo'));
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [rides, mode, percentile, bumpAgg, metric, norm]);
+  }, [rides, mode, percentile, bumpAgg, metric, norm, kind]);
 
   // Generic events fetcher hook — re-runs whenever the layer
   // becomes visible OR when rides/mode change. moveend triggers
@@ -417,6 +500,17 @@ export function PrivateBumpMap({
     setCount: setCloseEventsCount,
     setTruncated: setCloseEventsTruncated,
   });
+  useEventsFetch({
+    mapRef,
+    sourceId: SRC_OTHER_EVENTS,
+    endpoint: '/api/me/other-events/events',
+    visible: visible.otherEvents,
+    rides,
+    mode,
+    kind: kind === OTHER_EVENT_KIND_ALL ? null : kind,
+    setCount: setOtherEventsCount,
+    setTruncated: setOtherEventsTruncated,
+  });
 
   // Caption beneath the tab strips. Events counts take priority,
   // then percentile / mode / rides explainers fall through.
@@ -431,8 +525,19 @@ export function PrivateBumpMap({
       `${closeEventsCount.toLocaleString()} close-call${closeEventsCount === 1 ? '' : 's'}${closeEventsTruncated ? '*' : ''}`,
     );
   }
+  if (visible.otherEvents && otherEventsCount !== null) {
+    const label =
+      kind === OTHER_EVENT_KIND_ALL
+        ? `logged event${otherEventsCount === 1 ? '' : 's'}`
+        : `${kind.toLowerCase()} event${otherEventsCount === 1 ? '' : 's'}`;
+    captionParts.push(
+      `${otherEventsCount.toLocaleString()} ${label}${otherEventsTruncated ? '*' : ''}`,
+    );
+  }
+  const anyTruncated =
+    brakeEventsTruncated || closeEventsTruncated || otherEventsTruncated;
   const eventsCaption = captionParts.length
-    ? `Showing ${captionParts.join(' · ')} in viewport.${brakeEventsTruncated || closeEventsTruncated ? ' * capped — zoom in for the full set.' : ''}`
+    ? `Showing ${captionParts.join(' · ')} in viewport.${anyTruncated ? ' * capped — zoom in for the full set.' : ''}`
     : null;
 
   const fallbackCaption =
@@ -448,7 +553,11 @@ export function PrivateBumpMap({
   // only has one layer up.
   const showBumpAgg = visible.bumps;
   const showMetric = visible.brakeCells;
-  const showNorm = visible.brakeCells || visible.closeCells;
+  const showNorm =
+    visible.brakeCells || visible.closeCells || visible.otherCells;
+  // Kind picker only earns its space once the rider has logged more
+  // than one kind — with a single kind it duplicates "All kinds".
+  const showKind = (visible.otherCells || visible.otherEvents) && ownKinds.length > 1;
 
   const legendItems: ReadonlyArray<LegendItem> = [
     {
@@ -485,6 +594,21 @@ export function PrivateBumpMap({
       visible: visible.closeEvents,
       onToggle: () => toggleLayer('closeEvents'),
       swatch: <CircleMarkerSwatch color={CLOSE_CALL_MARKER_COLOR} />,
+    },
+    {
+      id: 'otherCells',
+      label: 'Logged event cells',
+      visible: visible.otherCells,
+      onToggle: () => toggleLayer('otherCells'),
+      swatch: <ColorSquareSwatch from="#ffbb00" to="#aa00dd" />,
+    },
+    {
+      id: 'otherEvents',
+      label: 'Logged events',
+      hint: 'incl. your custom kinds',
+      visible: visible.otherEvents,
+      onToggle: () => toggleLayer('otherEvents'),
+      swatch: <CircleMarkerSwatch color={OTHER_EVENT_MARKER_COLOR} />,
     },
     {
       id: 'halo',
@@ -565,6 +689,25 @@ export function PrivateBumpMap({
             onChange={(v) => setNorm(v as IncidentNorm)}
           />
         )}
+        {showKind && (
+          <TabStrip
+            ariaLabel="Event kind"
+            values={[
+              {
+                id: OTHER_EVENT_KIND_ALL,
+                label: 'All kinds',
+                help: 'Every event you have logged, built-in and custom.',
+              },
+              ...ownKinds.map((k) => ({
+                id: k.kind,
+                label: otherEventKindLabel(k.kind),
+                help: `${k.count.toLocaleString()} logged${k.isCustom ? ' · your own label, never shown publicly' : ''}`,
+              })),
+            ]}
+            current={kind}
+            onChange={setKind}
+          />
+        )}
       </div>
       <p className="mb-3 text-xs text-text-muted">{caption}</p>
       <div className="relative">
@@ -587,6 +730,7 @@ function useEventsFetch({
   visible,
   rides,
   mode,
+  kind = null,
   setCount,
   setTruncated,
 }: {
@@ -596,6 +740,8 @@ function useEventsFetch({
   visible: boolean;
   rides: RidesFilter;
   mode: TileMode;
+  // Only the other-events layer has a kind axis; null = every kind.
+  kind?: string | null;
   setCount: (n: number | null) => void;
   setTruncated: (b: boolean) => void;
 }) {
@@ -615,6 +761,7 @@ function useEventsFetch({
       const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
       const params: string[] = [`bbox=${encodeURIComponent(bbox)}`, `rides=${rides}`];
       if (mode === '3mo') params.push('mode=3mo');
+      if (kind) params.push(`kind=${encodeURIComponent(kind)}`);
       try {
         const res = await fetch(`${endpoint}?${params.join('&')}`, {
           credentials: 'same-origin',
@@ -639,7 +786,7 @@ function useEventsFetch({
       cancelled = true;
       map.off('moveend', onMoveEnd);
     };
-  }, [mapRef, sourceId, endpoint, visible, rides, mode, setCount, setTruncated]);
+  }, [mapRef, sourceId, endpoint, visible, rides, mode, kind, setCount, setTruncated]);
 }
 
 function TabStrip({

@@ -79,7 +79,7 @@ export default async function PublicMapPage() {
           who scrolls down. */}
       <section className="mt-8 max-w-3xl space-y-4 text-text-muted">
         <p>
-          Three views of the same 20 ft cell grid, aggregated across every
+          Four views of the same 20 ft cell grid, aggregated across every
           rider who&apos;s opted in to public sharing — mounted-sensor data
           only. Switch layers with the first tab strip; switch time windows
           with the second.
@@ -103,6 +103,12 @@ export default async function PublicMapPage() {
             <li>
               <strong className="text-text">Close calls</strong> — count of
               rider-tapped near-miss markers per cell.
+            </li>
+            <li>
+              <strong className="text-text">Event reports</strong> — count of
+              rider-logged infrastructure reports per cell, currently blocked
+              lanes. Only the app&apos;s built-in report types appear here;
+              anything a rider labelled themselves stays private to them.
             </li>
           </ul>
         </div>

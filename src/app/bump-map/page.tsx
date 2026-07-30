@@ -39,11 +39,11 @@ export default async function BumpMapPage() {
         Your bump map
       </h1>
       <p className="mt-2 max-w-3xl text-text-muted">
-        Three views of your own 20 ft cell grid — pavement bumpiness, hard
-        brakes, and close calls. Switch layers with the first tab strip;
-        filter by ride mode, time window, and percentile with the others.
-        Cells are anchored to the same grid the iOS app uses, so cells match
-        across web and device exactly.
+        Four views of your own 20 ft cell grid — pavement bumpiness, hard
+        brakes, close calls, and the events you logged. Switch layers with the
+        first tab strip; filter by ride mode, time window, and percentile with
+        the others. Cells are anchored to the same grid the iOS app uses, so
+        cells match across web and device exactly.
       </p>
       <ul className="mt-3 max-w-3xl space-y-1 text-sm text-text-muted">
         <li>
@@ -58,6 +58,12 @@ export default async function BumpMapPage() {
         <li>
           <strong>Close calls</strong> — count of near-miss markers you
           tapped per cell.
+        </li>
+        <li>
+          <strong>Logged events</strong> — the events you tapped during a
+          ride, including any kinds you named yourself. Your own labels show
+          up here and only here; the public map carries the app&apos;s
+          built-in report types only.
         </li>
       </ul>
       {hasData && (

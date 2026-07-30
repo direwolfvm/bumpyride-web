@@ -23,6 +23,11 @@ import {
   type TileMode,
   type TilePercentile,
 } from '@/lib/tile-mode';
+import {
+  OTHER_EVENT_KIND_ALL,
+  otherEventKindLabel,
+  PUBLIC_OTHER_EVENT_KIND_OPTIONS,
+} from '@/lib/other-event-tiles';
 
 // Public bump map. Multi-layer model controlled by a floating
 // legend overlay; tab strips configure each layer's render
@@ -34,6 +39,8 @@ type VisibleLayers = {
   brakeEvents: boolean;
   closeCells: boolean;
   closeEvents: boolean;
+  otherCells: boolean;
+  otherEvents: boolean;
   halo: boolean;
 };
 
@@ -43,6 +50,8 @@ const DEFAULT_VISIBLE: VisibleLayers = {
   brakeEvents: false,
   closeCells: false,
   closeEvents: false,
+  otherCells: false,
+  otherEvents: false,
   halo: false,
 };
 
@@ -107,12 +116,15 @@ const INCIDENT_NORM_DESCRIPTIONS: Record<IncidentNorm, string> = {
 const SRC_BUMPS = 'bumps';
 const SRC_BRAKE_CELLS = 'brake-cells';
 const SRC_CLOSE_CELLS = 'close-call-cells';
+const SRC_OTHER_CELLS = 'other-event-cells';
 const SRC_BRAKE_EVENTS = 'brake-events';
 const SRC_CLOSE_EVENTS = 'close-call-events';
+const SRC_OTHER_EVENTS = 'other-event-events';
 const SRC_HALO = 'coverage-halo';
 
 const BRAKE_MARKER_COLOR = '#dc2626';
 const CLOSE_CALL_MARKER_COLOR = '#f59e0b';
+const OTHER_EVENT_MARKER_COLOR = '#22d3ee';
 
 function bumpsTileUrl(
   mode: TileMode,
@@ -157,6 +169,21 @@ function closeCallsTileUrl(
   return params.length === 0 ? base : `${base}?${params.join('&')}`;
 }
 
+function otherEventsTileUrl(
+  mode: TileMode,
+  percentile: TilePercentile,
+  norm: IncidentNorm,
+  kind: string,
+): string {
+  const params: string[] = [];
+  if (mode !== 'all') params.push(`mode=${mode}`);
+  if (percentile !== 'all') params.push(`percentile=${percentile}`);
+  if (norm !== 'raw') params.push(`norm=${norm}`);
+  if (kind !== OTHER_EVENT_KIND_ALL) params.push(`kind=${encodeURIComponent(kind)}`);
+  const base = '/api/tiles/public/other-events/{z}/{x}/{y}';
+  return params.length === 0 ? base : `${base}?${params.join('&')}`;
+}
+
 function markerPaint(color: string): maplibregl.CircleLayerSpecification['paint'] {
   return {
     'circle-radius': [
@@ -195,10 +222,14 @@ export function PublicBumpMap({
   const [metric, setMetric] = useState<IncidentMetric>('count');
   const [norm, setNorm] = useState<IncidentNorm>('raw');
 
+  const [kind, setKind] = useState<string>(OTHER_EVENT_KIND_ALL);
+
   const [brakeEventsCount, setBrakeEventsCount] = useState<number | null>(null);
   const [brakeEventsTruncated, setBrakeEventsTruncated] = useState(false);
   const [closeEventsCount, setCloseEventsCount] = useState<number | null>(null);
   const [closeEventsTruncated, setCloseEventsTruncated] = useState(false);
+  const [otherEventsCount, setOtherEventsCount] = useState<number | null>(null);
+  const [otherEventsTruncated, setOtherEventsTruncated] = useState(false);
 
   function toggleLayer<K extends keyof VisibleLayers>(key: K) {
     setVisible((v) => ({ ...v, [key]: !v[key] }));
@@ -244,6 +275,14 @@ export function PublicBumpMap({
       });
       map.addLayer({ id: SRC_CLOSE_CELLS, type: 'raster', source: SRC_CLOSE_CELLS, layout: { visibility: 'none' } });
 
+      map.addSource(SRC_OTHER_CELLS, {
+        type: 'raster',
+        tiles: [otherEventsTileUrl(mode, percentile, norm, kind)],
+        tileSize: 256,
+        attribution: 'Event reports: consenting BumpyRide users',
+      });
+      map.addLayer({ id: SRC_OTHER_CELLS, type: 'raster', source: SRC_OTHER_CELLS, layout: { visibility: 'none' } });
+
       map.addSource(SRC_HALO, {
         type: 'raster',
         tiles: [bumpsTileUrl(mode, 'all', 'avg', 'halo')],
@@ -280,6 +319,18 @@ export function PublicBumpMap({
         layout: { visibility: 'none' },
         paint: markerPaint(CLOSE_CALL_MARKER_COLOR),
       });
+
+      map.addSource(SRC_OTHER_EVENTS, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer({
+        id: SRC_OTHER_EVENTS,
+        type: 'circle',
+        source: SRC_OTHER_EVENTS,
+        layout: { visibility: 'none' },
+        paint: markerPaint(OTHER_EVENT_MARKER_COLOR),
+      });
     });
 
     return () => {
@@ -301,8 +352,10 @@ export function PublicBumpMap({
       setVis(SRC_BUMPS, visible.bumps);
       setVis(SRC_BRAKE_CELLS, visible.brakeCells);
       setVis(SRC_CLOSE_CELLS, visible.closeCells);
+      setVis(SRC_OTHER_CELLS, visible.otherCells);
       setVis(SRC_BRAKE_EVENTS, visible.brakeEvents);
       setVis(SRC_CLOSE_EVENTS, visible.closeEvents);
+      setVis(SRC_OTHER_EVENTS, visible.otherEvents);
       setVis(SRC_HALO, visible.halo);
     };
     if (map.isStyleLoaded()) apply();
@@ -322,11 +375,12 @@ export function PublicBumpMap({
       setTiles(SRC_BUMPS, bumpsTileUrl(mode, percentile, bumpAgg));
       setTiles(SRC_BRAKE_CELLS, brakesTileUrl(mode, percentile, metric, norm));
       setTiles(SRC_CLOSE_CELLS, closeCallsTileUrl(mode, percentile, norm));
+      setTiles(SRC_OTHER_CELLS, otherEventsTileUrl(mode, percentile, norm, kind));
       setTiles(SRC_HALO, bumpsTileUrl(mode, 'all', 'avg', 'halo'));
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
-  }, [mode, percentile, bumpAgg, metric, norm]);
+  }, [mode, percentile, bumpAgg, metric, norm, kind]);
 
   // Events fetchers — independent per source.
   useEventsFetch({
@@ -347,6 +401,16 @@ export function PublicBumpMap({
     setCount: setCloseEventsCount,
     setTruncated: setCloseEventsTruncated,
   });
+  useEventsFetch({
+    mapRef,
+    sourceId: SRC_OTHER_EVENTS,
+    endpoint: '/api/public/other-events/events',
+    visible: visible.otherEvents,
+    mode,
+    kind: kind === OTHER_EVENT_KIND_ALL ? null : kind,
+    setCount: setOtherEventsCount,
+    setTruncated: setOtherEventsTruncated,
+  });
 
   const captionParts: string[] = [];
   if (visible.brakeEvents && brakeEventsCount !== null) {
@@ -359,8 +423,19 @@ export function PublicBumpMap({
       `${closeEventsCount.toLocaleString()} close-call${closeEventsCount === 1 ? '' : 's'}${closeEventsTruncated ? '*' : ''}`,
     );
   }
+  if (visible.otherEvents && otherEventsCount !== null) {
+    const label =
+      kind === OTHER_EVENT_KIND_ALL
+        ? `event report${otherEventsCount === 1 ? '' : 's'}`
+        : `${otherEventKindLabel(kind).toLowerCase()} report${otherEventsCount === 1 ? '' : 's'}`;
+    captionParts.push(
+      `${otherEventsCount.toLocaleString()} ${label}${otherEventsTruncated ? '*' : ''}`,
+    );
+  }
+  const anyTruncated =
+    brakeEventsTruncated || closeEventsTruncated || otherEventsTruncated;
   const eventsCaption = captionParts.length
-    ? `Showing ${captionParts.join(' · ')} in viewport.${brakeEventsTruncated || closeEventsTruncated ? ' * capped — zoom in for the full set.' : ''}`
+    ? `Showing ${captionParts.join(' · ')} in viewport.${anyTruncated ? ' * capped — zoom in for the full set.' : ''}`
     : null;
   const fallbackCaption =
     percentile === 'all' ? MODE_DESCRIPTIONS[mode] : PERCENTILE_DESCRIPTIONS[percentile];
@@ -368,7 +443,9 @@ export function PublicBumpMap({
 
   const showBumpAgg = visible.bumps;
   const showMetric = visible.brakeCells;
-  const showNorm = visible.brakeCells || visible.closeCells;
+  const showNorm =
+    visible.brakeCells || visible.closeCells || visible.otherCells;
+  const showKind = visible.otherCells || visible.otherEvents;
 
   const legendItems: ReadonlyArray<LegendItem> = [
     {
@@ -405,6 +482,21 @@ export function PublicBumpMap({
       visible: visible.closeEvents,
       onToggle: () => toggleLayer('closeEvents'),
       swatch: <CircleMarkerSwatch color={CLOSE_CALL_MARKER_COLOR} />,
+    },
+    {
+      id: 'otherCells',
+      label: 'Event report cells',
+      visible: visible.otherCells,
+      onToggle: () => toggleLayer('otherCells'),
+      swatch: <ColorSquareSwatch from="#ffbb00" to="#aa00dd" />,
+    },
+    {
+      id: 'otherEvents',
+      label: 'Event reports',
+      hint: 'blocked lanes',
+      visible: visible.otherEvents,
+      onToggle: () => toggleLayer('otherEvents'),
+      swatch: <CircleMarkerSwatch color={OTHER_EVENT_MARKER_COLOR} />,
     },
     {
       id: 'halo',
@@ -475,6 +567,21 @@ export function PublicBumpMap({
             onChange={(v) => setNorm(v as IncidentNorm)}
           />
         )}
+        {showKind && PUBLIC_OTHER_EVENT_KIND_OPTIONS.length > 2 && (
+          <Strip
+            ariaLabel="Event kind"
+            values={PUBLIC_OTHER_EVENT_KIND_OPTIONS.map((k) => ({
+              id: k.id,
+              label: k.label,
+              help:
+                k.id === OTHER_EVENT_KIND_ALL
+                  ? 'Every built-in event kind riders can report.'
+                  : `Only ${k.label.toLowerCase()} reports.`,
+            }))}
+            current={kind}
+            onChange={setKind}
+          />
+        )}
       </div>
       <p className="mb-3 text-xs text-text-muted">{caption}</p>
       <div className="relative">
@@ -494,6 +601,7 @@ function useEventsFetch({
   endpoint,
   visible,
   mode,
+  kind = null,
   setCount,
   setTruncated,
 }: {
@@ -502,6 +610,8 @@ function useEventsFetch({
   endpoint: string;
   visible: boolean;
   mode: TileMode;
+  // Only the other-events layer has a kind axis; null = every kind.
+  kind?: string | null;
   setCount: (n: number | null) => void;
   setTruncated: (b: boolean) => void;
 }) {
@@ -521,6 +631,7 @@ function useEventsFetch({
       const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
       const params: string[] = [`bbox=${encodeURIComponent(bbox)}`];
       if (mode === '3mo') params.push('mode=3mo');
+      if (kind) params.push(`kind=${encodeURIComponent(kind)}`);
       try {
         const res = await fetch(`${endpoint}?${params.join('&')}`);
         if (cancelled || !res.ok) return;
@@ -543,7 +654,7 @@ function useEventsFetch({
       cancelled = true;
       map.off('moveend', onMoveEnd);
     };
-  }, [mapRef, sourceId, endpoint, visible, mode, setCount, setTruncated]);
+  }, [mapRef, sourceId, endpoint, visible, mode, kind, setCount, setTruncated]);
 }
 
 function Strip({

@@ -70,8 +70,9 @@ export async function GET(req: NextRequest) {
           started_at: Date;
           ended_at: Date;
           point_count: number;
+          content_hash: string | null;
         }>(
-          `SELECT ride_uuid, title, started_at, ended_at, point_count
+          `SELECT ride_uuid, title, started_at, ended_at, point_count, content_hash
              FROM rides
             WHERE user_id = $1
               AND (started_at, ride_uuid) < ($2::timestamptz, $3::uuid)
@@ -85,8 +86,9 @@ export async function GET(req: NextRequest) {
           started_at: Date;
           ended_at: Date;
           point_count: number;
+          content_hash: string | null;
         }>(
-          `SELECT ride_uuid, title, started_at, ended_at, point_count
+          `SELECT ride_uuid, title, started_at, ended_at, point_count, content_hash
              FROM rides
             WHERE user_id = $1
             ORDER BY started_at DESC, ride_uuid DESC
@@ -121,6 +123,13 @@ export async function GET(req: NextRequest) {
           endedAt: r.ended_at.toISOString(),
           pointCount: Number(r.point_count),
           sizeBytes: estimateRideSizeBytes({ pointCount: Number(r.point_count) }),
+          // The hash the server holds for this ride. null means the
+          // ride predates the content_hash column (or was uploaded
+          // before hashing shipped) and will always report `needed`
+          // until its next upload. A client that adopts these values
+          // can reconcile an entire existing library without
+          // re-uploading it.
+          contentHash: r.content_hash,
         })),
         nextCursor,
         totalCount,

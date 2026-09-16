@@ -85,6 +85,15 @@ export async function POST(req: NextRequest) {
       avgBumpiness: result.avgBumpiness,
       maxBumpiness: result.maxBumpiness,
       achievementsAwarded: result.achievementsAwarded,
+      // The hash we actually stored for this ride, so the client can
+      // compare it against its own and — more usefully — adopt it as
+      // the value to send to /check and /check-batch. Without this the
+      // two sides can disagree indefinitely with no way to notice:
+      // see SYNC_BATCH_CHECK_WEB_HANDOFF.md's 2026-09-16 field report,
+      // where every ride reported `needed` for six weeks because the
+      // client's hash never matched the stored one and neither side
+      // could see the other's value.
+      contentHash,
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});

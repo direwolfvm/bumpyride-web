@@ -295,8 +295,15 @@ export default async function ScorePage() {
           </li>
           <li>
             Turning public sharing off resets your score to zero —
-            achievements included. Turning it back on backfills both
-            from every eligible ride you&apos;ve ever synced.
+            achievements included. Turning it back on gives you exactly
+            what you had: points are restored as they were awarded, not
+            recalculated, so nothing shifts while you are away.
+          </li>
+          <li>
+            Points are final once earned. A cell is scored when you ride
+            it and keeps that value for good — other riders arriving,
+            backfilling older rides, or leaving can never change what a
+            ride already earned you.
           </li>
         </ul>
       </section>

@@ -4,210 +4,288 @@ import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
   description:
-    'BumpyRide is a cycling road-quality tracker: an iPhone app that captures pavement roughness, hard-brake events, and rider-tapped close calls, plus a web app for syncing, browsing, and contributing to three public-aggregated safety layers.',
+    'BumpyRide turns your phone into a road sensor. Ride normally and it maps rough pavement, hard-braking spots, and close calls — building a free public map of which streets are safe to ride and which ones need fixing.',
 };
+
+const APP_STORE_URL = 'https://apps.apple.com/app/id6769580787';
 
 export default function Home() {
   return (
-    <div className="mx-auto max-w-3xl">
-      <header className="flex flex-col items-center text-center">
+    <div className="mx-auto max-w-5xl">
+      {/* ---------------------------------------------------------- Hero */}
+      <header className="flex flex-col items-center pt-4 text-center">
         <Image
           src="/icon-192.png"
           alt=""
-          width={96}
-          height={96}
+          width={80}
+          height={80}
           priority
           className="rounded-2xl shadow-lg"
         />
-        <h1 className="mt-6 text-3xl font-semibold tracking-tight sm:text-4xl">
-          Map road roughness with your iPhone
+        <h1 className="mt-6 text-4xl font-semibold tracking-tight sm:text-5xl">
+          Every ride helps fix the road
         </h1>
-        <p className="mt-4 max-w-xl text-lg text-text-muted">
-          BumpyRide turns a cycling commute into data. Your phone records
-          vertical acceleration alongside GPS, detects hard brakes
-          post-hoc, and lets you tap to log near-misses while you ride.
-          Three public maps — pavement bumpiness, hard brakes, and close
-          calls — aggregate across consenting riders at 20 ft resolution.
+        <p className="mt-5 max-w-2xl text-lg text-text-muted">
+          BumpyRide turns your phone into a road sensor. Ride like you
+          normally would — it maps the rough pavement, the corners where
+          riders slam on the brakes, and the near-misses that never make it
+          into a crash report.
+        </p>
+        <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+          <a
+            href={APP_STORE_URL}
+            className="rounded-lg bg-accent-strong px-6 py-3 font-medium text-white hover:bg-accent-strong/90"
+          >
+            Get it for iPhone — free
+          </a>
+          <Link
+            href="/map"
+            className="rounded-lg border border-border-strong px-6 py-3 font-medium hover:border-accent"
+          >
+            See the public map
+          </Link>
+        </div>
+        <p className="mt-3 text-xs text-text-dim">
+          No account needed to browse the map.
         </p>
       </header>
 
-      <section className="mt-12">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-text-muted">
-          How it works
-        </h2>
-        <p className="mt-3">
-          As you ride, your iPhone samples accelerometer data at 50 Hz and
-          projects it onto gravity — so the math works whether the phone is
-          in your jersey pocket, your handlebar mount, or anywhere in
-          between. The vertical component, windowed to a one-second RMS,
-          becomes a <em>bumpiness</em> score in g. Every few feet of road
-          gets one.
-        </p>
-        <p className="mt-3">
-          When you finish a ride, the app sweeps the points for sustained
-          decelerations and tags them as <em>hard brakes</em>. During the
-          ride you can also tap <em>Log Close Call</em> to flag a near-miss
-          on the spot — minimal interaction so it works one-handed.
-        </p>
-        <p className="mt-3">
-          Over many rides those signals accumulate into 20-foot grid cells.
-          Useful for finding the smoother route to work, flagging streets
-          for repair, mapping intersections that consistently force hard
-          brakes, or simply understanding what your commute is actually
-          like.
-        </p>
-      </section>
-
-      <section className="mt-12">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-text-muted">
-          On your iPhone
-        </h2>
-        <div className="mt-4 flex flex-col gap-3 rounded-lg border border-accent-strong/40 bg-accent-soft p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
-          <p>
-            <strong>Now available on the App Store.</strong> Free download
-            for iPhone — record rides, see your personal bump map, and sync
-            with your account here.
-          </p>
-          <a
-            href="https://apps.apple.com/app/id6769580787"
-            className="inline-block shrink-0 rounded bg-accent-strong px-4 py-2 font-medium text-white hover:bg-accent-strong/90"
-          >
-            Download on the App Store
-          </a>
+      {/* -------------------------------------------------- Screenshots */}
+      <section className="mt-14">
+        <div className="grid grid-cols-1 gap-8 sm:grid-cols-3">
+          <Shot
+            src="/screenshots/ride-detail.png"
+            alt="A recorded ride in the BumpyRide app: a bumpiness trace reading 0.72 g, above a route coloured green through orange as the pavement worsens."
+            caption="See exactly where your ride got rough."
+          />
+          <Shot
+            src="/screenshots/bump-map.png"
+            alt="The BumpyRide bump map, showing a street scored in 20-foot coloured cells from green to red."
+            caption="Every 20 feet of street you ride, scored."
+          />
+          <Shot
+            src="/screenshots/saved-rides.png"
+            alt="The saved rides list in BumpyRide, showing distance, duration and roughness for recent rides."
+            caption="Your whole riding history, one tap away."
+          />
         </div>
-        <ul className="mt-4 space-y-3">
-          <Feature title="Live recording">
-            GPS path plus 50 Hz accelerometer, sampled every 10 ft of travel.
-            Vertical-only filtering via gravity projection so pedaling and
-            braking don&apos;t read as bumps.
-          </Feature>
-          <Feature title="Pocket Mode">
-            Optional 3 Hz Butterworth high-pass that cancels body cadence
-            when the phone rides on you instead of the frame. Each ride is
-            tagged with its sensing mode for later analysis.
-          </Feature>
-          <Feature title="Seismograph + bumpiness readout">
-            Real-time vertical-acceleration waveform with a one-second RMS
-            score, alongside a color-coded route polyline that turns red
-            (then purple) as the pavement gets worse.
-          </Feature>
-          <Feature title="Hard-brake detection">
-            Post-ride sweep of GPS-derived deceleration plus horizontal
-            user-acceleration, picking out sustained brakes above
-            2.5 m/s² (0.25 g) lasting 0.8 s or more. Rides re-run through
-            the detector on app launch so legacy rides get backfilled.
-          </Feature>
-          <Feature title="Log Close Call">
-            One-handed button you can tap mid-ride to mark a near-miss in
-            place. Five-second undo. No severity slider or notes — just
-            id + time + location, intentionally minimal so the
-            interaction stays safe.
-          </Feature>
-          <Feature title="Saved rides">
-            Editable titles, scrubbable playback with the chart and zoom,
-            trim and split, plus export-to-Photos for a clean shareable image
-            of the route.
-          </Feature>
-          <Feature title="Bump map tab">
-            Aggregates everything you&apos;ve recorded into a 20 ft grid,
-            rendered as colored cells with a purple-glow halo so sparse
-            data stays visible at any zoom level.
-          </Feature>
-          <Feature title="Background recording">
-            Keeps recording when the screen locks or the app is in the
-            background, with the iOS location indicator on for the whole
-            ride so you always know it&apos;s working.
-          </Feature>
+      </section>
+
+      {/* ----------------------------------------------------- For riders */}
+      <section className="mt-16">
+        <h2 className="text-2xl font-semibold tracking-tight">
+          What you get as a rider
+        </h2>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <Card title="Pick a better route">
+            Find out which streets are smooth and which ones will rattle
+            your teeth — before you ride them, not after.
+          </Card>
+          <Card title="See your ride in detail">
+            Every ride comes back as a map coloured by how rough the road
+            was, with your hard brakes and close calls marked on it.
+          </Card>
+          <Card title="Report it in one tap">
+            Blocked bike lane? Close call? One button, no typing, no menus
+            — it works one-handed and with gloves on.
+          </Card>
+          <Card title="Earn points for new ground">
+            You score the most for streets nobody has mapped yet, and keep
+            earning for coming back to check on them.{' '}
+            <Link href="/score" className="text-accent hover:underline">
+              See how scoring works
+            </Link>
+            .
+          </Card>
+        </div>
+      </section>
+
+      {/* ------------------------------------------- For cities / safety */}
+      <section className="mt-16 rounded-2xl border border-border bg-surface p-6 sm:p-8">
+        <h2 className="text-2xl font-semibold tracking-tight">
+          Data that cities can actually use
+        </h2>
+        <p className="mt-3 max-w-3xl text-text-muted">
+          Most of what makes a street feel unsafe never gets written down
+          anywhere. BumpyRide is an attempt to write it down — measured the
+          same way, everywhere, by the people actually riding.
+        </p>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <Card title="Near-misses you'd never otherwise hear about">
+            A crash gets a police report. The hundreds of near-misses
+            before it get nothing at all. Riders log those in one tap, with
+            a location attached.
+          </Card>
+          <Card title="Pavement complaints with evidence">
+            Not &ldquo;the road is bad&rdquo; — a specific 20-foot stretch,
+            measured on many trips by many different riders.
+          </Card>
+          <Card title="The intersections that scare people">
+            Somewhere riders brake hard again and again is usually
+            somewhere that needs a second look.
+          </Card>
+          <Card title="Blocked lanes, logged as they happen">
+            When a bike lane stops working, riders mark it in the moment.
+            You get a map of where and how often.
+          </Card>
+          <Card title="No hardware, no budget line">
+            The sensors are already in riders&apos; pockets. Nothing to
+            install, nothing to maintain.
+          </Card>
+          <Card title="Open to everyone">
+            The public map is free to browse and export, with no account
+            and no licence terms to negotiate.
+          </Card>
+        </div>
+        <Link
+          href="/map"
+          className="mt-6 inline-block font-medium text-accent hover:underline"
+        >
+          Browse the public map →
+        </Link>
+      </section>
+
+      {/* -------------------------------------------------- How it works */}
+      <section className="mt-16">
+        <h2 className="text-2xl font-semibold tracking-tight">How it works</h2>
+        <ol className="mt-6 grid gap-4 sm:grid-cols-3">
+          <Step n={1} title="Start a ride">
+            Phone on your handlebars or in your pocket — both work. Then
+            put it away.
+          </Step>
+          <Step n={2} title="Just ride">
+            It feels the road underneath you, notices when you brake hard,
+            and otherwise stays out of the way. It keeps going with the
+            screen off.
+          </Step>
+          <Step n={3} title="Your ride syncs here">
+            Look back at any ride on bumpyride.me, and add it to the public
+            map if you want to.
+          </Step>
+        </ol>
+      </section>
+
+      {/* ------------------------------------------------------ Privacy */}
+      <section className="mt-16">
+        <h2 className="text-2xl font-semibold tracking-tight">
+          Your rides are private until you say otherwise
+        </h2>
+        <ul className="mt-5 space-y-3 text-text-muted">
+          <li>
+            <strong className="text-text">Sharing starts off.</strong>{' '}
+            Nothing you record reaches the public map until you turn it on
+            in{' '}
+            <Link href="/settings/privacy" className="text-accent hover:underline">
+              your privacy settings
+            </Link>
+            .
+          </li>
+          <li>
+            <strong className="text-text">
+              Even then, your route never leaves.
+            </strong>{' '}
+            Only an average for a patch of street is shared — never the
+            path you took, never when you rode, never your name.
+          </li>
+          <li>
+            <strong className="text-text">
+              Nothing publishes from one person alone.
+            </strong>{' '}
+            A stretch of street appears on the public map only after at
+            least three different riders have ridden it.
+          </li>
+          <li>
+            <strong className="text-text">
+              Anything you label yourself stays yours.
+            </strong>{' '}
+            Custom notes you add to an event are visible on your own map
+            and nowhere else, ever.
+          </li>
         </ul>
       </section>
 
-      <section className="mt-12">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-text-muted">
-          On the web — bumpyride.me
+      {/* ------------------------------------------------ Closing CTA */}
+      <section className="mt-16 flex flex-col items-center rounded-2xl border border-accent-strong/40 bg-accent-soft p-8 text-center">
+        <h2 className="text-2xl font-semibold tracking-tight">
+          Start mapping your commute
         </h2>
-        <ul className="mt-4 space-y-3">
-          <Feature title="Mirror of your rides">
-            Every ride synced from your phone shows up here with the same
-            colored route, a bumpiness-over-time chart, red dots for the
-            ride&apos;s hard brakes, violet diamonds for any close calls
-            you logged, and inline title editing. Web edits and iOS edits
-            both go through the same schema, so renames stay in sync.
-          </Feature>
-          <Feature title="Your bump map">
-            Same 20 ft grid as the phone, same purple-glow halo, but in your
-            browser. Built from a per-user aggregate so it only ever shows
-            your own rides.
-          </Feature>
-          <Feature title="Public aggregated maps">
-            Anonymous, no account needed. Three layers on the same 20 ft
-            cell grid — pavement bumpiness, hard brakes, and close calls
-            — switchable via tabs. Each cell appears only after at least
-            three distinct riders have contributed, so a single rider&apos;s
-            data never publishes on its own. Only mounted-mode rides
-            contribute (matching the iOS Bump Map&apos;s default filter).
-            No timestamps, no routes, no per-user attribution.{' '}
-            <Link href="/map" className="hover:underline">
-              See the live maps →
-            </Link>
-          </Feature>
-          <Feature title="iOS sync">
-            Two pairing paths: paste an API token from{' '}
-            <Link href="/settings/tokens" className="hover:underline">
-              /settings/tokens
-            </Link>
-            , or tap <em>Sign in with bumpyride.me</em> in the iOS app for a
-            one-tap browser round-trip that mints a token automatically.
-          </Feature>
-          <Feature title="Theme">
-            Light, dark, or follow your OS — including a matching dark
-            basemap so the public map fits whichever theme you&apos;re in.
-          </Feature>
-        </ul>
+        <p className="mt-2 max-w-xl text-text-muted">
+          Free on the App Store. Your first ride already tells you
+          something; a few weeks of them start telling your city something.
+        </p>
+        <a
+          href={APP_STORE_URL}
+          className="mt-5 rounded-lg bg-accent-strong px-6 py-3 font-medium text-white hover:bg-accent-strong/90"
+        >
+          Get it for iPhone — free
+        </a>
       </section>
 
+      {/* ------------------------------------------- Detail, for the curious */}
       <section className="mt-12">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-text-muted">
-          Privacy by default
-        </h2>
-        <p className="mt-3">
-          Your rides are yours. Contributing to the public maps is{' '}
-          <strong>off by default</strong> — you turn it on at{' '}
-          <Link href="/settings/privacy" className="hover:underline">
-            /settings/privacy
-          </Link>
-          . Even when on, only aggregated cells leave your account:
-          never your route, never your timestamps, never anything that
-          traces back to you individually. The same threshold applies
-          per-feature, so a single brake event or close call on a quiet
-          corner is held back from the public map until at least three
-          distinct riders have hit that cell. Pocket-mode rides stay in
-          your personal view and never reach the public aggregate.
-        </p>
-        <p className="mt-3">
-          API tokens for the iOS app are hashed at rest with sha256; the
-          plaintext is shown exactly once at creation and never retrievable
-          afterwards. Revoke any token at any time from{' '}
-          <Link href="/settings/tokens" className="hover:underline">
-            /settings/tokens
-          </Link>
-          .
-        </p>
+        <details className="rounded-lg border border-border bg-surface">
+          <summary className="cursor-pointer px-5 py-4 font-medium text-text-muted hover:text-text">
+            The technical details, if you want them
+          </summary>
+          <div className="space-y-3 border-t border-border px-5 py-4 text-sm text-text-muted">
+            <p>
+              While you ride, the phone samples its accelerometer at 50 Hz
+              and projects the reading onto gravity, so it measures the
+              road going up and down rather than you pedalling or turning.
+              That vertical component, as a one-second RMS, becomes a{' '}
+              <em>bumpiness</em> score in g — one for roughly every 10 feet
+              of travel.
+            </p>
+            <p>
+              Carrying the phone on your body instead of the frame adds
+              your cadence to the signal, so Pocket Mode applies a 3 Hz
+              high-pass filter to remove it. Each ride records which mode
+              it used. Pocket-mode rides stay on your own map and never
+              reach the public aggregate.
+            </p>
+            <p>
+              After a ride, the app re-reads it for sustained decelerations
+              — above 2.5 m/s² (0.25 g) for 0.8 seconds or more — and tags
+              those as hard brakes. Close calls and other events are
+              tapped by you in the moment.
+            </p>
+            <p>
+              Everything aggregates onto a fixed 20-foot grid, identical on
+              the phone and the web, so a cell means the same thing in both
+              places. The public map shows a cell once at least three
+              separate riders have contributed to it, and carries no
+              timestamps, no routes, and no per-rider attribution.
+            </p>
+            <p>
+              API tokens for the app are stored only as a sha256 hash — the
+              token itself is shown once when you create it and is never
+              recoverable afterwards. You can revoke one at any time from{' '}
+              <Link
+                href="/settings/tokens"
+                className="text-accent hover:underline"
+              >
+                your token settings
+              </Link>
+              .
+            </p>
+          </div>
+        </details>
       </section>
 
-      <footer className="mt-16 border-t border-border pt-6 text-sm text-text-muted">
-        BumpyRide is built in the open. The iOS app lives at{' '}
+      <footer className="mt-14 border-t border-border pt-6 text-sm text-text-muted">
+        BumpyRide is built in the open — the{' '}
         <a
           href="https://github.com/direwolfvm/bumpyride"
           className="hover:underline"
         >
-          github.com/direwolfvm/bumpyride
-        </a>
-        ; the web app at{' '}
+          iPhone app
+        </a>{' '}
+        and the{' '}
         <a
           href="https://github.com/direwolfvm/bumpyride-web"
           className="hover:underline"
         >
-          github.com/direwolfvm/bumpyride-web
+          website
         </a>
         .
       </footer>
@@ -215,7 +293,32 @@ export default function Home() {
   );
 }
 
-function Feature({
+function Shot({
+  src,
+  alt,
+  caption,
+}: {
+  src: string;
+  alt: string;
+  caption: string;
+}) {
+  return (
+    <figure className="flex flex-col items-center">
+      <Image
+        src={src}
+        alt={alt}
+        width={294}
+        height={640}
+        className="w-full max-w-[240px] rounded-2xl border border-border shadow-xl"
+      />
+      <figcaption className="mt-3 text-center text-sm text-text-muted">
+        {caption}
+      </figcaption>
+    </figure>
+  );
+}
+
+function Card({
   title,
   children,
 }: {
@@ -223,9 +326,29 @@ function Feature({
   children: React.ReactNode;
 }) {
   return (
-    <li className="rounded-lg border border-border bg-surface p-4">
+    <div className="rounded-lg border border-border bg-bg p-4">
       <div className="font-medium">{title}</div>
-      <p className="mt-1 text-text-muted">{children}</p>
+      <p className="mt-1 text-sm text-text-muted">{children}</p>
+    </div>
+  );
+}
+
+function Step({
+  n,
+  title,
+  children,
+}: {
+  n: number;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <li className="rounded-lg border border-border bg-surface p-5">
+      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-strong text-sm font-semibold text-white">
+        {n}
+      </div>
+      <div className="mt-3 font-medium">{title}</div>
+      <p className="mt-1 text-sm text-text-muted">{children}</p>
     </li>
   );
 }

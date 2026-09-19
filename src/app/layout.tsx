@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { auth, signOut } from '@/auth';
+import { Analytics } from '@/components/Analytics';
 import { ThemeInit } from '@/components/ThemeInit';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import './globals.css';
@@ -146,6 +147,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             </nav>
           </div>
         </footer>
+        <Analytics />
       </body>
     </html>
   );

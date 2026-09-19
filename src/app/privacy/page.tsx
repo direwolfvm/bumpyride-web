@@ -5,7 +5,7 @@ import Link from 'next/link';
 // time we rebuild the site; update it explicitly when the policy itself
 // changes. Apple's App Review will check this against the policy's
 // actual content.
-const EFFECTIVE_DATE = 'May 14, 2026';
+const EFFECTIVE_DATE = 'September 19, 2026';
 
 export const metadata: Metadata = {
   title: 'Privacy policy',
@@ -215,16 +215,40 @@ export default function PrivacyPage() {
       </Ul>
 
       <H2>Third parties and tracking</H2>
+      <p>
+        The iPhone app and this website differ here, so they are described
+        separately.
+      </p>
       <Ul>
         <li>
-          BumpyRide does not share data with any third parties — not for
-          analytics, not for advertising, not for any other purpose.
+          <strong>The iPhone app has no tracking of any kind.</strong> No
+          analytics SDKs, no tracking SDKs, no ad SDKs, and no in-app
+          advertising. The only external network destination is
+          bumpyride.me itself, and only once you have paired a web account.
         </li>
-        <li>The app contains no analytics SDKs, tracking SDKs, or ad SDKs.</li>
-        <li>The app contains no in-app advertising.</li>
         <li>
-          The only external network destination is bumpyride.me itself —
-          and only when you have paired a web account.
+          <strong>This website uses Google Analytics</strong> to count page
+          visits — how many people arrive, and which pages they find
+          useful. It is configured so the data cannot be used for
+          advertising: Google Signals (cross-device and demographic
+          reporting) and ad personalisation are both switched off. Google
+          Analytics 4 does not record full IP addresses.
+        </li>
+        <li>
+          <strong>
+            Your rides are never sent to Google, or to anyone else.
+          </strong>{' '}
+          Analytics sees page visits and nothing more. Rides, routes,
+          bumpiness samples, hard brakes, close calls, and logged events
+          never pass through it. The only place any of that data goes is
+          the public map, as the aggregated cells described above, and only
+          if you have turned sharing on.
+        </li>
+        <li>
+          If you would rather not be counted, any content blocker or
+          tracker-blocking browser will stop it, and every part of the site
+          keeps working exactly as before. We do not put up a cookie wall
+          and nothing here is gated on being measured.
         </li>
       </Ul>
 

@@ -1,5 +1,5 @@
 import { notFound, redirect } from 'next/navigation';
-import { and, asc, desc, eq, gt, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 import Link from 'next/link';
 import { auth } from '@/auth';
 import { db } from '@/db';
@@ -112,7 +112,13 @@ export default async function RideDetailPage({
         repeat: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 1)::int`,
       })
       .from(scoreEvents)
-      .where(eq(scoreEvents.rideUuid, rideUuid)),
+      // Withdrawn rows (sharing turned off) count for nothing.
+      .where(
+        and(
+          eq(scoreEvents.rideUuid, rideUuid),
+          isNull(scoreEvents.withdrawnAt),
+        ),
+      ),
     // Newer ride (previous in the rides list = closer to "now").
     db
       .select({

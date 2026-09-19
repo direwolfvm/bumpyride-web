@@ -603,7 +603,8 @@ export async function applyRideUpload(
              COUNT(*) FILTER (WHERE points IN (10, 5)) AS new_cells,
              COUNT(*) FILTER (WHERE points IN (1, 3))  AS revisits,
              COALESCE(SUM(points), 0)                  AS ride_points
-           FROM score_events WHERE ride_uuid = $1`,
+           FROM score_events
+            WHERE ride_uuid = $1 AND withdrawn_at IS NULL`,
           [payload.id],
         ),
         client.query<{ close_calls: string; blocked_lanes: string }>(

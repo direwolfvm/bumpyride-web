@@ -351,7 +351,8 @@ export async function awardMilestones(
        COALESCE(SUM(r.distance_m) / 1609.344, 0)::float8 AS total_miles,
        COUNT(*)::int AS total_rides,
        COALESCE(SUM(EXTRACT(EPOCH FROM (r.ended_at - r.started_at))) / 3600, 0)::float8 AS total_hours,
-       (SELECT COUNT(DISTINCT (se.ix, se.iy)) FROM score_events se WHERE se.user_id = $1)::int AS total_cells
+       (SELECT COUNT(DISTINCT (se.ix, se.iy)) FROM score_events se
+         WHERE se.user_id = $1 AND se.withdrawn_at IS NULL)::int AS total_cells
      FROM rides r
      JOIN users u ON u.id = r.user_id
      WHERE r.user_id = $1
@@ -460,11 +461,13 @@ export async function backfillUserAchievements(
       (SELECT COUNT(*) FROM other_events o
         WHERE o.ride_uuid = r.ride_uuid AND o.is_public_eligible AND o.kind = 'blocked-lane') AS blocked_lanes,
       COALESCE((SELECT COUNT(*) FROM score_events se
-        WHERE se.ride_uuid = r.ride_uuid AND se.points IN (10, 5)), 0) AS new_cells,
+        WHERE se.ride_uuid = r.ride_uuid AND se.withdrawn_at IS NULL
+          AND se.points IN (10, 5)), 0) AS new_cells,
       COALESCE((SELECT COUNT(*) FROM score_events se
-        WHERE se.ride_uuid = r.ride_uuid AND se.points IN (1, 3)), 0) AS revisits,
+        WHERE se.ride_uuid = r.ride_uuid AND se.withdrawn_at IS NULL
+          AND se.points IN (1, 3)), 0) AS revisits,
       COALESCE((SELECT SUM(se.points) FROM score_events se
-        WHERE se.ride_uuid = r.ride_uuid), 0) AS ride_points
+        WHERE se.ride_uuid = r.ride_uuid AND se.withdrawn_at IS NULL), 0) AS ride_points
     FROM rides r
     JOIN users u ON u.id = r.user_id
     WHERE r.user_id = $1

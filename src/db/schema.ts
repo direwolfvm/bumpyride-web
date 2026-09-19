@@ -340,8 +340,10 @@ export const bumpCells = pgTable(
 // ride contributed bumpiness to (gated by sharing-on + mounted-or-
 // legacy). Each row holds the awarded tier (10 = first ever to the
 // cell, 5 = first by this user but not globally first, 1 = repeat
-// visit). Re-uploading a ride wipes its rows and recomputes against
-// the rest of the world; sharing-off wipes all of the user's rows.
+// visit). A row is awarded ONCE and never re-tiered: re-uploading a
+// ride keeps the points its cells already earned, so nobody else's
+// activity can move your score. Sharing-off withdraws rows rather
+// than deleting them (see withdrawnAt).
 export const scoreEvents = pgTable(
   'score_events',
   {
@@ -356,6 +358,12 @@ export const scoreEvents = pgTable(
     iy: integer('iy').notNull(),
     points: integer('points').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    // Set when the owner turns public sharing off. The row is kept so
+    // opting back in restores the points originally awarded instead of
+    // re-deriving them against a world that has moved on. While
+    // withdrawn the row counts for nothing — not the owner's total,
+    // and not other riders' tier checks.
+    withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
   },
   (t) => ({
     rideCellUq: uniqueIndex('score_events_ride_uuid_ix_iy_key').on(

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { rides, scoreEvents } from '@/db/schema';
 import { getRequestUserId } from '@/lib/request-auth';
@@ -51,7 +51,10 @@ export async function GET(
       repeat: sql<number>`COUNT(*) FILTER (WHERE ${scoreEvents.points} = 1)::int`,
     })
     .from(scoreEvents)
-    .where(eq(scoreEvents.rideUuid, rideUuid));
+    // Withdrawn rows (sharing turned off) count for nothing.
+    .where(
+      and(eq(scoreEvents.rideUuid, rideUuid), isNull(scoreEvents.withdrawnAt)),
+    );
 
   const totalPoints = Number(row?.total ?? 0);
   const firstEver = Number(row?.firstEver ?? 0);

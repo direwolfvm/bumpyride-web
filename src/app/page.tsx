@@ -204,6 +204,32 @@ export default function Home() {
         </ul>
       </section>
 
+      {/* ------------------------------------------------ Companion tool */}
+      <section className="mt-16 rounded-2xl border border-border bg-surface p-6 sm:p-8">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-2xl">
+            <div className="text-xs uppercase tracking-wide text-text-muted">
+              Companion tool
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+              Ride with a camera? Clip the moments you flagged.
+            </h2>
+            <p className="mt-3 text-text-muted">
+              BumpyRide Clip lines your camera footage up against a ride and
+              cuts out the seconds around each close call or blocked lane you
+              logged. It runs entirely on your own computer — nothing is
+              uploaded. Free, and aimed at riders comfortable with a terminal.
+            </p>
+          </div>
+          <Link
+            href="/clip"
+            className="shrink-0 rounded-lg border border-border-strong px-5 py-2.5 font-medium hover:border-accent"
+          >
+            See the tool →
+          </Link>
+        </div>
+      </section>
+
       {/* ------------------------------------------------ Closing CTA */}
       <section className="mt-16 flex flex-col items-center rounded-2xl border border-accent-strong/40 bg-accent-soft p-8 text-center">
         <h2 className="text-2xl font-semibold tracking-tight">

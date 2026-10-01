@@ -9,9 +9,16 @@ export const metadata: Metadata = {
 };
 
 const REPO_URL = 'https://github.com/direwolfvm/bumpyride-clip';
-const DMG_URL = '/downloads/BumpyRide-Clip-1.0.dmg';
-const DMG_VERSION = '1.0';
-const DMG_SIZE = '815 KB';
+// Binaries live in GitHub Releases, not in this repo — see
+// bumpyride-clip/docs/WEB_HANDOFF.md. Bump these four together.
+const RELEASE_URL =
+  'https://github.com/direwolfvm/bumpyride-clip/releases/tag/v1.0.2';
+const DMG_URL =
+  'https://github.com/direwolfvm/bumpyride-clip/releases/download/v1.0.2/BumpyRide-Clip-1.0.2-3.dmg';
+const DMG_VERSION = '1.0.2';
+const DMG_SIZE = '1.4 MB';
+const DMG_SHA256 =
+  '727144e0107c3b597e691f6d306332d79381dd48c7837156332fe46e0cb387d5';
 
 export default function ClipPage() {
   return (
@@ -59,23 +66,27 @@ export default function ClipPage() {
           </a>
         </div>
         <p className="mt-3 text-xs text-text-dim">
-          Version {DMG_VERSION} · {DMG_SIZE} · macOS 26.2 or later · signed
-          and notarized by Apple, so it opens with a double-click.
+          Version {DMG_VERSION} · {DMG_SIZE} · macOS 26.2 or later ·
+          universal, for Apple silicon and Intel · signed and notarized by
+          Apple, so it opens with a double-click.
         </p>
       </header>
 
       {/* ------------------------------------------------ Screenshot */}
       <section className="mt-12">
         <Image
-          src="/screenshots/clip-macos.jpg"
-          alt="The BumpyRide Clip Mac app, with a reports sidebar and a toolbar offering Link Videos, Manage Videos, Video Sync, Save Project and Clip Inspector."
-          width={1200}
-          height={773}
+          src="/screenshots/clip-macos-sample.png"
+          alt="BumpyRide Clip open on a sample ride: a sidebar listing a close call, a blocked lane and a pothole; the matching moment playing with an event marker reading EVENT RECORDED; and an inspector with before and after trim set to 15 and 5 seconds."
+          width={1320}
+          height={850}
           className="w-full rounded-xl border border-border shadow-2xl"
           priority
         />
         <p className="mt-3 text-center text-sm text-text-muted">
           Open a ride, link the footage, and work through what you flagged.
+          Shown on the built-in sample project, which generates its own
+          footage so you can try the whole thing before committing a ride
+          to it.
         </p>
       </section>
 
@@ -100,6 +111,12 @@ export default function ClipPage() {
             video in ride order. Clips can even span two camera files.
           </Card>
         </div>
+        <p className="mt-4 text-sm text-text-muted">
+          Not sure yet? Open the built-in sample project. It generates its
+          own short video on your machine — nothing to download, no footage
+          of yours involved — so you can click through the whole workflow
+          before deciding it is worth pointing at a real ride.
+        </p>
       </section>
 
       {/* ------------------------------------------------- Video Sync */}
@@ -261,8 +278,13 @@ export default function ClipPage() {
             </a>
           </div>
           <p className="mt-4 text-xs text-text-dim">
-            {DMG_SIZE} · requires macOS 26.2 or later. Nothing else to
-            install — no Node, no FFmpeg, and it never needs the network.
+            {DMG_SIZE} · requires macOS 26.2 or later · universal binary.
+            Nothing else to install — no Node, no FFmpeg, and it never
+            needs the network.{' '}
+            <a href={RELEASE_URL} className="text-accent hover:underline">
+              Release notes and checksums
+            </a>
+            .
           </p>
         </div>
 
@@ -297,13 +319,29 @@ npm start`}</code>
             FFmpeg, which does the video work; after that it runs offline
             too. Projects saved in either version open in the other.
           </p>
+          <p className="mt-3 text-sm text-text-muted">
+            Away from a Mac, point it at a folder of downloaded rides with{' '}
+            <code className="rounded bg-bg px-1.5 py-0.5 text-xs">
+              BUMPYRIDE_RIDES_DIR
+            </code>
+            , then link your videos by path.
+          </p>
           <a
-            href={REPO_URL}
+            href="https://github.com/direwolfvm/bumpyride-clip/blob/main/docs/browser-app.md"
             className="mt-4 inline-block font-medium text-accent hover:underline"
           >
-            Source and full instructions on GitHub →
+            Full browser-app guide →
           </a>
         </div>
+
+        <p className="mt-6 text-sm text-text-muted">
+          Both versions are open source — the Mac app and the browser app
+          live in{' '}
+          <a href={REPO_URL} className="text-accent hover:underline">
+            the same repository
+          </a>
+          .
+        </p>
 
         <div className="mt-6 grid gap-4 sm:grid-cols-2">
           <Card title="Worth knowing">
@@ -312,10 +350,9 @@ npm start`}</code>
             instant here.
           </Card>
           <Card title="Verifying the download">
-            SHA-256:{' '}
-            <code className="break-all text-xs">
-              b8412eeacbea0831b9a066d67e0aab8597cfcfba49d3b909dae0f2badccf8b1e
-            </code>
+            SHA-256: <code className="break-all text-xs">{DMG_SHA256}</code>{' '}
+            — also published as{' '}
+            <code className="text-xs">SHA256SUMS.txt</code> on the release.
           </Card>
         </div>
       </section>

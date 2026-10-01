@@ -20,10 +20,10 @@ export default function ClipPage() {
             Companion tool
           </span>
           <span className="rounded border border-border-strong px-2 py-1 text-text-muted">
-            Runs on your computer
+            Native Mac app
           </span>
           <span className="rounded border border-border-strong px-2 py-1 text-text-muted">
-            For comfortable-with-a-terminal riders
+            Build it yourself in Xcode
           </span>
         </div>
         <h1 className="mt-5 text-4xl font-semibold tracking-tight sm:text-5xl">
@@ -37,9 +37,9 @@ export default function ClipPage() {
           thing you flagged.
         </p>
         <p className="mt-3 max-w-2xl text-text-muted">
-          Nothing is uploaded. It runs as a small web app on your own
-          machine, reads your video files where they already sit, and has
-          no account, no server, and no cloud anything.
+          Nothing is uploaded. It is a Mac app that reads your video files
+          where they already sit — no account, no server, no network
+          connection, and nothing to install alongside it.
         </p>
         <div className="mt-7 flex flex-col gap-3 sm:flex-row">
           <a
@@ -60,15 +60,15 @@ export default function ClipPage() {
       {/* ------------------------------------------------ Screenshot */}
       <section className="mt-12">
         <Image
-          src="/screenshots/clip-overview.jpg"
-          alt="BumpyRide Clip showing a loaded ride: three setup cards for the ride, the footage and the alignment, a list of reports including a close call and a blocked lane, and the matching moment playing from the rider's camera footage."
-          width={800}
-          height={600}
+          src="/screenshots/clip-macos.jpg"
+          alt="The BumpyRide Clip Mac app, with a reports sidebar and a toolbar offering Link Videos, Manage Videos, Video Sync, Save Project and Clip Inspector."
+          width={1200}
+          height={773}
           className="w-full rounded-xl border border-border shadow-2xl"
           priority
         />
         <p className="mt-3 text-center text-sm text-text-muted">
-          A ride, its footage, and the reports lined up against each other.
+          Open a ride, link the footage, and work through what you flagged.
         </p>
       </section>
 
@@ -137,12 +137,24 @@ export default function ClipPage() {
               Afterwards
             </div>
             <p className="mt-2 text-sm text-text-muted">
-              The tool finds that marker and uses it as frame zero, then
-              places every other report relative to it. If a ride has no
-              marker, you can type the real start time in yourself, and
-              nudge it by a few seconds if the cut looks early or late.
+              The app finds that marker and uses it as frame zero, then
+              places every other report relative to it. No marker on an
+              older ride? Type the real start time in yourself.
             </p>
           </div>
+        </div>
+        <div className="mt-4 rounded-lg border border-border bg-bg p-4">
+          <div className="text-xs uppercase tracking-wide text-text-muted">
+            If a cut lands early or late
+          </div>
+          <p className="mt-2 text-sm text-text-muted">
+            Nudge the whole ride a tenth of a second at a time until it
+            sits right — or skip the arithmetic entirely: scrub until the
+            frame where it actually happened is on screen, pause, and
+            choose <strong className="text-text">Match event to this
+            frame</strong>. The correction applies to every report on the
+            ride and is saved with the project, so you only do it once.
+          </p>
         </div>
       </section>
 
@@ -152,18 +164,27 @@ export default function ClipPage() {
           Trim it until it says what you mean
         </h2>
         <p className="mt-3 max-w-2xl text-text-muted">
-          Each clip starts as the 15 seconds either side of the moment you
-          flagged. Drag the handles out to show the whole approach, or
-          pull them in to the two seconds that matter. Tick the ones worth
-          keeping and export them together.
+          Each clip starts as the 15 seconds before the moment you flagged
+          and 5 after — enough of the approach to see it coming. Drag the
+          handles out to show more, or pull them in to the two seconds
+          that matter.
+        </p>
+        <p className="mt-3 max-w-2xl text-text-muted">
+          Found a length that works? Tick the other reports and apply the
+          same timing to all of them at once. A playback bar counts down
+          to the flagged moment, marks it, then counts up again — a review
+          aid only, never burned into what you export.
         </p>
         <Image
           src="/screenshots/clip-trim.jpg"
-          alt="The clip editor in BumpyRide Clip, with before and after trim controls set to 15 seconds each, a 30-second clip length, and an export button."
+          alt="A clip being trimmed, with separate before and after handles, the resulting clip length, and an export button."
           width={800}
           height={600}
           className="mt-6 w-full rounded-xl border border-border shadow-2xl"
         />
+        <p className="mt-3 text-sm text-text-muted">
+          Trimming a clip in the browser version, which works the same way.
+        </p>
       </section>
 
       {/* ---------------------------------------------------- Privacy */}
@@ -178,9 +199,9 @@ export default function ClipPage() {
         </p>
         <ul className="mt-5 space-y-3 text-text-muted">
           <li>
-            <strong className="text-text">There is no server to send it to.</strong>{' '}
-            The app runs on your own machine and only listens to your own
-            machine. No account, no database, no analytics.
+            <strong className="text-text">There is nowhere to send it.</strong>{' '}
+            The Mac app needs no network connection at all. No account, no
+            server, no database, no analytics.
           </li>
           <li>
             <strong className="text-text">Your originals are read, not copied.</strong>{' '}
@@ -191,12 +212,17 @@ export default function ClipPage() {
             <strong className="text-text">Project files carry no video.</strong>{' '}
             Saving a project stores report times, your trim points, and
             enough of a fingerprint to recognise the same source files
-            later — no footage, no file paths, no GPS trace.
+            later — no footage, no GPS trace. The Mac app also saves a
+            bookmark so it can reopen your videos without asking again,
+            and that can record where those files live — so treat a
+            project file as personal metadata, not something to post
+            publicly.
           </li>
           <li>
             <strong className="text-text">Finishing up clears the workspace.</strong>{' '}
-            Temporary previews and renders are removed when you end the
-            session or stop the server.
+            Half-finished renders are cleaned up when you finish a project
+            or quit, and previews are built in memory rather than written
+            out as extra video files.
           </li>
         </ul>
       </section>
@@ -207,27 +233,25 @@ export default function ClipPage() {
           What it takes to run
         </h2>
         <p className="mt-3 max-w-2xl text-text-muted">
-          This one is genuinely for tinkerers. There is no installer — you
-          clone a repository and run it from a terminal, and it keeps
-          running while you work.
+          There is no download link, because there is nothing signed to
+          download. You build it yourself: clone the repository, open the
+          project in Xcode, and hit Run.
         </p>
         <pre className="mt-5 overflow-x-auto rounded-lg border border-border bg-surface p-4 text-sm">
           <code>{`git clone ${REPO_URL}
 cd bumpyride-clip
-npm install
-npm start`}</code>
+open 'BumpyRide Clip/BumpyRide Clip.xcodeproj'`}</code>
         </pre>
         <p className="mt-3 text-text-muted">
-          Then open{' '}
-          <code className="rounded bg-surface px-1.5 py-0.5 text-sm">
-            http://127.0.0.1:4317
-          </code>{' '}
-          and open a ride from your BumpyRide iCloud folder.
+          Choose the <strong>BumpyRide Clip</strong> scheme and{' '}
+          <strong>My Mac</strong>, then Run. From then on it is an ordinary
+          Mac app.
         </p>
         <div className="mt-6 grid gap-4 sm:grid-cols-2">
           <Card title="You will need">
-            Node.js 22 or newer. The first install downloads FFmpeg, which
-            does the actual video work; after that it runs offline.
+            A Mac on macOS 26.2 or later, and Xcode 26.2 or later to build
+            it. Nothing else — no Node, no FFmpeg, no dependencies to
+            install.
           </Card>
           <Card title="Worth knowing">
             Exporting re-encodes video so the cuts land in the right
@@ -236,11 +260,11 @@ npm start`}</code>
           </Card>
         </div>
         <p className="mt-6 text-sm text-text-dim">
-          Built for macOS, where it can read your BumpyRide iCloud folder
-          directly and open files with a native picker. It runs elsewhere
-          too, pointing it at video files by path instead. FFmpeg is
-          licensed separately — see the notes in the repository if you
-          plan to redistribute it.
+          Not on a Mac? The original version still ships in the same
+          repository — a small web app you run locally with Node and
+          FFmpeg, with the same reports, the same Video Sync alignment,
+          and the same calibration. Projects saved there open in the Mac
+          app, so starting on one and finishing on the other is fine.
         </p>
       </section>
 

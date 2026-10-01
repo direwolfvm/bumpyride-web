@@ -217,8 +217,8 @@ export default function Home() {
             <p className="mt-3 text-text-muted">
               BumpyRide Clip lines your camera footage up against a ride and
               cuts out the seconds around each close call or blocked lane you
-              logged. It runs entirely on your own computer — nothing is
-              uploaded. Free, and aimed at riders comfortable with a terminal.
+              logged. A free Mac app that runs entirely on your own machine —
+              nothing is uploaded, and you build it yourself in Xcode.
             </p>
           </div>
           <Link

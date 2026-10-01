@@ -201,7 +201,7 @@ export default function ClipPage() {
         </p>
         <Image
           src="/screenshots/clip-trim.jpg"
-          alt="A clip being trimmed, with separate before and after handles, the resulting clip length, and an export button."
+          alt="A clip being trimmed in the browser version: separate before and after handles set to 15 and 5 seconds, a 20-second clip, a bar marking where the report lands, and an export button."
           width={800}
           height={600}
           className="mt-6 w-full rounded-xl border border-border shadow-2xl"

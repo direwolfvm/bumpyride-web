@@ -9,6 +9,9 @@ export const metadata: Metadata = {
 };
 
 const REPO_URL = 'https://github.com/direwolfvm/bumpyride-clip';
+const DMG_URL = '/downloads/BumpyRide-Clip-1.0.dmg';
+const DMG_VERSION = '1.0';
+const DMG_SIZE = '815 KB';
 
 export default function ClipPage() {
   return (
@@ -23,7 +26,7 @@ export default function ClipPage() {
             Native Mac app
           </span>
           <span className="rounded border border-border-strong px-2 py-1 text-text-muted">
-            Build it yourself in Xcode
+            Free · signed &amp; notarized
           </span>
         </div>
         <h1 className="mt-5 text-4xl font-semibold tracking-tight sm:text-5xl">
@@ -43,18 +46,22 @@ export default function ClipPage() {
         </p>
         <div className="mt-7 flex flex-col gap-3 sm:flex-row">
           <a
-            href={REPO_URL}
+            href={DMG_URL}
             className="rounded-lg bg-accent-strong px-6 py-3 font-medium text-white hover:bg-accent-strong/90"
           >
-            Get it on GitHub
+            Download for Mac — free
           </a>
           <a
-            href="#setup"
+            href="#other-platforms"
             className="rounded-lg border border-border-strong px-6 py-3 font-medium hover:border-accent"
           >
-            What it takes to run
+            Windows or Linux?
           </a>
         </div>
+        <p className="mt-3 text-xs text-text-dim">
+          Version {DMG_VERSION} · {DMG_SIZE} · macOS 26.2 or later · signed
+          and notarized by Apple, so it opens with a double-click.
+        </p>
       </header>
 
       {/* ------------------------------------------------ Screenshot */}
@@ -229,43 +236,88 @@ export default function ClipPage() {
 
       {/* ------------------------------------------------------ Setup */}
       <section id="setup" className="mt-16 scroll-mt-20">
-        <h2 className="text-2xl font-semibold tracking-tight">
-          What it takes to run
-        </h2>
-        <p className="mt-3 max-w-2xl text-text-muted">
-          There is no download link, because there is nothing signed to
-          download. You build it yourself: clone the repository, open the
-          project in Xcode, and hit Run.
-        </p>
-        <pre className="mt-5 overflow-x-auto rounded-lg border border-border bg-surface p-4 text-sm">
-          <code>{`git clone ${REPO_URL}
+        <h2 className="text-2xl font-semibold tracking-tight">Getting it</h2>
+        <div className="mt-6 rounded-2xl border border-accent-strong/40 bg-accent-soft p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-text-muted">
+                On a Mac
+              </div>
+              <h3 className="mt-1 text-xl font-semibold tracking-tight">
+                Download and open it
+              </h3>
+              <p className="mt-2 max-w-xl text-text-muted">
+                It is signed and notarized by Apple, so it opens like any
+                other app — no Gatekeeper warning, no right-click-to-open
+                trick, nothing to build. Drag it to Applications and you
+                are done.
+              </p>
+            </div>
+            <a
+              href={DMG_URL}
+              className="shrink-0 rounded-lg bg-accent-strong px-6 py-3 font-medium text-white hover:bg-accent-strong/90"
+            >
+              Download {DMG_VERSION}
+            </a>
+          </div>
+          <p className="mt-4 text-xs text-text-dim">
+            {DMG_SIZE} · requires macOS 26.2 or later. Nothing else to
+            install — no Node, no FFmpeg, and it never needs the network.
+          </p>
+        </div>
+
+        <div
+          id="other-platforms"
+          className="mt-6 scroll-mt-20 rounded-2xl border border-border bg-surface p-6"
+        >
+          <div className="text-xs uppercase tracking-wide text-text-muted">
+            On Windows or Linux
+          </div>
+          <h3 className="mt-1 text-xl font-semibold tracking-tight">
+            Run the browser version instead
+          </h3>
+          <p className="mt-2 max-w-2xl text-text-muted">
+            The Mac app grew out of an earlier version that runs anywhere
+            Node does. Same reports, same Video Sync alignment, same
+            calibration — it just runs as a small web app on your own
+            machine instead, which you open in a browser at{' '}
+            <code className="rounded bg-bg px-1.5 py-0.5 text-sm">
+              127.0.0.1:4317
+            </code>
+            .
+          </p>
+          <pre className="mt-4 overflow-x-auto rounded-lg border border-border bg-bg p-4 text-sm">
+            <code>{`git clone ${REPO_URL}
 cd bumpyride-clip
-open 'BumpyRide Clip/BumpyRide Clip.xcodeproj'`}</code>
-        </pre>
-        <p className="mt-3 text-text-muted">
-          Choose the <strong>BumpyRide Clip</strong> scheme and{' '}
-          <strong>My Mac</strong>, then Run. From then on it is an ordinary
-          Mac app.
-        </p>
+npm install
+npm start`}</code>
+          </pre>
+          <p className="mt-3 text-sm text-text-muted">
+            Needs Node.js 22 or newer. The first install pulls down
+            FFmpeg, which does the video work; after that it runs offline
+            too. Projects saved in either version open in the other.
+          </p>
+          <a
+            href={REPO_URL}
+            className="mt-4 inline-block font-medium text-accent hover:underline"
+          >
+            Source and full instructions on GitHub →
+          </a>
+        </div>
+
         <div className="mt-6 grid gap-4 sm:grid-cols-2">
-          <Card title="You will need">
-            A Mac on macOS 26.2 or later, and Xcode 26.2 or later to build
-            it. Nothing else — no Node, no FFmpeg, no dependencies to
-            install.
-          </Card>
           <Card title="Worth knowing">
             Exporting re-encodes video so the cuts land in the right
             place, which takes real time on long clips. Accurate beats
             instant here.
           </Card>
+          <Card title="Verifying the download">
+            SHA-256:{' '}
+            <code className="break-all text-xs">
+              b8412eeacbea0831b9a066d67e0aab8597cfcfba49d3b909dae0f2badccf8b1e
+            </code>
+          </Card>
         </div>
-        <p className="mt-6 text-sm text-text-dim">
-          Not on a Mac? The original version still ships in the same
-          repository — a small web app you run locally with Node and
-          FFmpeg, with the same reports, the same Video Sync alignment,
-          and the same calibration. Projects saved there open in the Mac
-          app, so starting on one and finishing on the other is fine.
-        </p>
       </section>
 
       {/* -------------------------------------------------------- CTA */}
@@ -278,11 +330,18 @@ open 'BumpyRide Clip/BumpyRide Clip.xcodeproj'`}</code>
           them.
         </p>
         <a
-          href={REPO_URL}
+          href={DMG_URL}
           className="mt-5 rounded-lg bg-accent-strong px-6 py-3 font-medium text-white hover:bg-accent-strong/90"
         >
-          Get it on GitHub
+          Download for Mac — free
         </a>
+        <p className="mt-3 text-sm text-text-muted">
+          Not on a Mac?{' '}
+          <a href="#other-platforms" className="text-accent hover:underline">
+            Run the browser version
+          </a>
+          .
+        </p>
         <p className="mt-4 text-sm text-text-muted">
           New to BumpyRide?{' '}
           <Link href="/" className="text-accent hover:underline">

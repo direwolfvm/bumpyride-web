@@ -218,7 +218,8 @@ export default function Home() {
               BumpyRide Clip lines your camera footage up against a ride and
               cuts out the seconds around each close call or blocked lane you
               logged. A free Mac app that runs entirely on your own machine —
-              nothing is uploaded, and you build it yourself in Xcode.
+              nothing is uploaded. There is a browser version for Windows and
+              Linux too.
             </p>
           </div>
           <Link

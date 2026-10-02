@@ -386,7 +386,10 @@ export function PrivateBumpMap({
         type: 'raster',
         source: SRC_OTHERS_VISITED,
         layout: { visibility: 'none' },
-        paint: { 'raster-opacity': 0.5 },
+        // Near-opaque: the fill's own alpha already sets how strong
+        // this reads. Halving it here as well was what made the first
+        // version wash out into the basemap.
+        paint: { 'raster-opacity': 0.9 },
       });
 
       // Coverage halo backdrop — translucent purple halo over every

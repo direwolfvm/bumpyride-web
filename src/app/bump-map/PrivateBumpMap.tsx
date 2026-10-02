@@ -4,9 +4,11 @@ import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { basemapStyleForCurrentTheme } from '@/lib/map-style';
+import { OTHERS_CELL_FILL } from '@/lib/map-colors';
 import {
   CircleMarkerSwatch,
   ColorSquareSwatch,
+  FlatCellSwatch,
   HaloSwatch,
   MapLegend,
   type LegendItem,
@@ -46,6 +48,7 @@ type VisibleLayers = {
   otherCells: boolean;
   otherEvents: boolean;
   halo: boolean;
+  othersVisited: boolean;
 };
 
 const DEFAULT_VISIBLE: VisibleLayers = {
@@ -57,6 +60,7 @@ const DEFAULT_VISIBLE: VisibleLayers = {
   otherCells: false,
   otherEvents: false,
   halo: false,
+  othersVisited: false,
 };
 
 const RIDES_LABELS: Record<RidesFilter, string> = {
@@ -138,6 +142,7 @@ const SRC_BRAKE_EVENTS = 'brake-events';
 const SRC_CLOSE_EVENTS = 'close-call-events';
 const SRC_OTHER_EVENTS = 'other-event-events';
 const SRC_HALO = 'coverage-halo';
+const SRC_OTHERS_VISITED = 'others-visited';
 
 // localStorage keys. Migrated from the old `bumpmap.mode` key
 // (which used to hold mounted|pocket|all — now the rides axis).
@@ -367,6 +372,23 @@ export function PrivateBumpMap({
       });
       map.addLayer({ id: SRC_OTHER_CELLS, type: 'raster', source: SRC_OTHER_CELLS, layout: { visibility: 'none' } });
 
+      // Other riders' public coverage, minus the user's own. Added
+      // before the halo so it sits underneath: it is context for the
+      // blank space on your map, not something to read values off.
+      map.addSource(SRC_OTHERS_VISITED, {
+        type: 'raster',
+        tiles: ['/api/tiles/user/others/{z}/{x}/{y}'],
+        tileSize: 256,
+        attribution: 'Public coverage: consenting BumpyRide riders',
+      });
+      map.addLayer({
+        id: SRC_OTHERS_VISITED,
+        type: 'raster',
+        source: SRC_OTHERS_VISITED,
+        layout: { visibility: 'none' },
+        paint: { 'raster-opacity': 0.5 },
+      });
+
       // Coverage halo backdrop — translucent purple halo over every
       // cell the user has visited. Independent toggle so the user
       // can pull it up for context any time.
@@ -449,6 +471,7 @@ export function PrivateBumpMap({
       setVis(SRC_CLOSE_EVENTS, visible.closeEvents);
       setVis(SRC_OTHER_EVENTS, visible.otherEvents);
       setVis(SRC_HALO, visible.halo);
+      setVis(SRC_OTHERS_VISITED, visible.othersVisited);
     };
     if (map.isStyleLoaded()) apply();
     else map.once('load', apply);
@@ -617,6 +640,14 @@ export function PrivateBumpMap({
       visible: visible.halo,
       onToggle: () => toggleLayer('halo'),
       swatch: <HaloSwatch />,
+    },
+    {
+      id: 'othersVisited',
+      label: "Others' visited cells",
+      hint: 'not yet yours',
+      visible: visible.othersVisited,
+      onToggle: () => toggleLayer('othersVisited'),
+      swatch: <FlatCellSwatch color={OTHERS_CELL_FILL} />,
     },
   ];
 

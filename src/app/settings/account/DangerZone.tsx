@@ -238,7 +238,9 @@ function ConfirmModal({
                 not recoverable.
               </span>
               <input
-                type="email"
+                // Not type="email": the value to retype may be a username,
+                // which the browser would otherwise refuse to submit.
+                type="text"
                 required
                 autoComplete="off"
                 value={confirmEmail}

@@ -7,8 +7,14 @@
 // free of imports.
 
 // Flat fill for "others' visited cells" on the personal bump map:
-// public coverage the rider has not been to themselves. Deliberately
-// desaturated so it reads as backdrop rather than as a measurement,
-// and clearly distinct from the purple halo that already means "cells
-// YOU have visited" on the same map.
-export const OTHERS_CELL_FILL = 'rgba(125, 150, 185, 0.55)';
+// public coverage the rider has not been to themselves.
+//
+// Blue is the one hue this map had left. Everything else is spoken
+// for: green -> yellow -> orange -> red -> purple is the bumpiness
+// ramp, yellow -> purple the incident ramp, purple again the halo for
+// cells YOU have visited, amber close calls, cyan logged events. A
+// saturated blue sits far from the warm ramp, is clearly not the
+// magenta-leaning purple next to it, and is nothing like the grey of
+// the basemap — which the first attempt at this colour was, so it
+// disappeared into the map.
+export const OTHERS_CELL_FILL = 'rgba(29, 111, 224, 0.72)';

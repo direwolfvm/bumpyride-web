@@ -1,4 +1,5 @@
 import { createCanvas } from '@napi-rs/canvas';
+import { OTHERS_CELL_FILL } from '@/lib/map-colors';
 import { CELL_LAT_DEG, CELL_LON_DEG, cellOrigin } from './bump-grid';
 
 // Server-side bump-tile renderer. Port of the iOS BumpMapTileOverlay.swift
@@ -161,6 +162,42 @@ function drawGlow(
   for (const r of rects) ctx.rect(r.px, r.py, r.w, r.h);
   ctx.fill();
   ctx.restore();
+}
+
+// Flat translucent fill for a set of cells, with no glow and no value
+// colouring. Used by the "others' visited cells" layer on the personal
+// map, which answers "where have other riders been that I haven't?" —
+// a backdrop, not a measurement.
+//
+// Deliberately NOT the purple glow used by renderTile's halo: that
+// already means "cells YOU have visited" on the same map, and the two
+// layers are most useful switched on together. A flat, desaturated
+// fill reads as other people's ground without competing with either
+// the bumpiness ramp or your own halo.
+//
+// The colour lives in lib/map-colors.ts so the legend swatch can share
+// it without importing this file, which pulls in a native canvas
+// binary that cannot be bundled for the browser.
+
+export function renderFlatCellTile(
+  z: number,
+  x: number,
+  y: number,
+  cells: ReadonlyArray<{ ix: number; iy: number }>,
+  fillStyle: string = OTHERS_CELL_FILL,
+): Buffer {
+  if (cells.length === 0) return EMPTY_TILE;
+
+  const canvas = createCanvas(TILE_SIZE, TILE_SIZE);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = fillStyle;
+  ctx.beginPath();
+  for (const c of cells) {
+    const r = cellRect(z, x, y, c.ix, c.iy);
+    ctx.rect(r.px, r.py, r.w, r.h);
+  }
+  ctx.fill();
+  return canvas.toBuffer('image/png');
 }
 
 export function renderTile(

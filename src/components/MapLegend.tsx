@@ -102,6 +102,17 @@ export function CircleMarkerSwatch({ color }: { color: string }) {
   );
 }
 
+export function FlatCellSwatch({ color }: { color: string }) {
+  // Matches renderFlatCellTile's flat fill — no glow, so it reads as
+  // a plain backdrop next to HaloSwatch's purple aura.
+  return (
+    <span
+      className="block h-2 w-2 rounded-sm"
+      style={{ background: color }}
+    />
+  );
+}
+
 export function HaloSwatch() {
   // Mimics the renderer's translucent purple halo. Pure CSS box-
   // shadow so it stays sharp at any zoom.

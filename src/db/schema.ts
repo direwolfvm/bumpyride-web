@@ -26,7 +26,14 @@ import type { AdapterAccountType } from 'next-auth/adapters';
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   name: text('name'),
-  email: text('email').notNull().unique(),
+  // Optional: an account can be identified by `username` instead. We
+  // never send email, so an address is only ever a login name. See
+  // migrations/0023 and lib/identity.ts.
+  email: text('email').unique(),
+  // Alternative sign-in identifier. Never contains "@", so it cannot
+  // collide with an email or be matched by Google account linking.
+  // Uniqueness is enforced case-insensitively by users_username_lower_key.
+  username: text('username'),
   emailVerified: timestamp('email_verified', { withTimezone: true }),
   image: text('image'),
   passwordHash: text('password_hash'),

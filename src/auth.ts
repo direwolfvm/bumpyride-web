@@ -5,6 +5,8 @@ import { DrizzleAdapter } from '@auth/drizzle-adapter';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { db } from '@/db';
+import { whereAnyIdentifier } from '@/lib/identity';
+import { identifierOf } from '@/lib/identity';
 import {
   accounts,
   sessions,
@@ -18,7 +20,10 @@ import {
 //
 // Credentials provider intentionally only accepts users created via
 // /api/auth/signup (those have a passwordHash). Google-only users won't be
-// able to sign in via the email/password form.
+// able to sign in via the identifier/password form.
+//
+// The identifier field takes a username OR an email address — we send no
+// email, so an address is only ever a login name. See lib/identity.ts.
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: DrizzleAdapter(db, {
     usersTable: users,
@@ -38,16 +43,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
     Credentials({
       credentials: {
-        email: { label: 'Email', type: 'email' },
+        // Still named `email` on the wire so existing clients and
+        // bookmarked forms keep working; it accepts either form.
+        email: { label: 'Username or email', type: 'text' },
         password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials) {
-        const email = String(credentials?.email ?? '').trim().toLowerCase();
+        const raw = String(credentials?.email ?? '').trim().toLowerCase();
         const password = String(credentials?.password ?? '');
-        if (!email || !password) return null;
+        if (!raw || !password) return null;
 
         const row = await db.query.users.findFirst({
-          where: eq(users.email, email),
+          where: whereAnyIdentifier(raw),
         });
         if (!row || !row.passwordHash) return null;
         // Anonymized users are orphan rows that exist only to hold
@@ -60,7 +67,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         return {
           id: row.id,
+          // Null for a username-only account, deliberately: nothing
+          // should mistake a login name for a contactable address.
           email: row.email,
+          identifier: identifierOf(row),
           name: row.name ?? null,
           image: row.image ?? null,
         };
@@ -72,11 +82,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // On initial sign-in, `user.id` is the db row id; pin it onto the JWT
       // so subsequent requests can read it without a DB round-trip.
       if (user?.id) token.sub = user.id;
+      // Google sign-ins have no identifier of their own; fall back to the
+      // address the provider gave us.
+      if (user) {
+        token.identifier =
+          (user as { identifier?: string }).identifier ?? user.email ?? null;
+      }
       return token;
     },
     async session({ session, token }) {
       if (token?.sub && session.user) {
         session.user.id = token.sub;
+        session.user.identifier =
+          (token as { identifier?: string | null }).identifier ?? null;
       }
       return session;
     },

@@ -13,14 +13,14 @@ export function SignupForm({ next }: { next?: string | null }) {
     setError(null);
     setPending(true);
     const fd = new FormData(e.currentTarget);
-    const email = String(fd.get('email') ?? '');
+    const identifier = String(fd.get('identifier') ?? '');
     const password = String(fd.get('password') ?? '');
     const name = String(fd.get('name') ?? '').trim() || undefined;
 
     const res = await fetch('/api/auth/signup', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email, password, name }),
+      body: JSON.stringify({ identifier, password, name }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -29,7 +29,9 @@ export function SignupForm({ next }: { next?: string | null }) {
       return;
     }
     const signin = await signIn('credentials', {
-      email,
+      // The credentials provider's field is still called `email`; it
+      // accepts either form.
+      email: identifier,
       password,
       redirect: false,
     });
@@ -47,14 +49,18 @@ export function SignupForm({ next }: { next?: string | null }) {
         <Field label="Name (optional)">
           <input name="name" type="text" autoComplete="name" className={inputCls} />
         </Field>
-        <Field label="Email">
+        <Field label="Username or email">
           <input
-            name="email"
-            type="email"
+            name="identifier"
+            type="text"
             required
-            autoComplete="email"
+            autoComplete="username"
             className={inputCls}
           />
+          <p className="mt-1 text-xs text-text-dim">
+            A username is fine — we never send you email, so an address is
+            optional.
+          </p>
         </Field>
         <Field label="Password">
           <input

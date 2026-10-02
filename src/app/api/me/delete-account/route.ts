@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ZodError, z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
+import { identifierOf } from '@/lib/identity';
 import { users } from '@/db/schema';
 import { deleteUserAccount } from '@/lib/account-deletion';
 import { getRequestUserId } from '@/lib/request-auth';
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
   // their own address.
   const user = await db.query.users.findFirst({
     where: eq(users.id, userId),
-    columns: { email: true, anonymizedAt: true },
+    columns: { email: true, username: true, anonymizedAt: true },
   });
   if (!user) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
@@ -67,11 +68,14 @@ export async function POST(req: NextRequest) {
       { status: 410 },
     );
   }
+  // Confirm against the account's sign-in identifier, which may be a
+  // username rather than an email address.
   if (
-    user.email.toLowerCase() !== body.confirmEmail.trim().toLowerCase()
+    identifierOf(user).toLowerCase() !==
+    body.confirmEmail.trim().toLowerCase()
   ) {
     return NextResponse.json(
-      { error: 'confirmEmail does not match the account email' },
+      { error: 'confirmation does not match the account identifier' },
       { status: 400 },
     );
   }

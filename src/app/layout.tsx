@@ -80,7 +80,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                     Sharing
                   </Link>
                   <span className="hidden text-text-muted sm:inline">
-                    {session.user.email}
+                    {session.user.identifier ?? session.user.email}
                   </span>
                   <ThemeToggle />
                   <form

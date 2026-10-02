@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { eq } from 'drizzle-orm';
 import { auth } from '@/auth';
 import { db } from '@/db';
+import { identifierOf } from '@/lib/identity';
 import { accounts, users } from '@/db/schema';
 import { ProfileForm, PasswordForm } from './AccountForms';
 import { DangerZone } from './DangerZone';
@@ -19,6 +20,7 @@ export default async function AccountPage() {
     columns: {
       name: true,
       email: true,
+      username: true,
       passwordHash: true,
       shareToPublicMap: true,
     },
@@ -52,15 +54,25 @@ export default async function AccountPage() {
       <section className="mt-8 rounded-lg border border-border bg-surface p-5">
         <h2 className="text-base font-medium">Profile</h2>
         <p className="mt-1 text-sm text-text-muted">
-          Signed in as <strong>{user.email}</strong>. Email isn&apos;t
-          editable here yet — contact{' '}
-          <a
-            href="mailto:me@jordaneccl.es"
-            className="text-accent hover:underline"
-          >
-            support
-          </a>{' '}
-          if you need it changed.
+          Signed in as <strong>{identifierOf(user)}</strong>.{' '}
+          {user.username ? (
+            <>
+              This account signs in with a username, and we hold no email
+              address for it. Nothing here needs one — password reset uses
+              your recovery codes or authenticator app.
+            </>
+          ) : (
+            <>
+              Your sign-in identifier isn&apos;t editable here yet — contact{' '}
+              <a
+                href="mailto:me@jordaneccl.es"
+                className="text-accent hover:underline"
+              >
+                support
+              </a>{' '}
+              if you need it changed.
+            </>
+          )}
         </p>
         <div className="mt-4">
           <ProfileForm initialName={user.name ?? ''} />
@@ -123,7 +135,7 @@ export default async function AccountPage() {
       </section>
 
       <DangerZone
-        email={user.email}
+        email={identifierOf(user)}
         isSharing={user.shareToPublicMap}
       />
     </div>

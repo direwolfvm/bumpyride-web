@@ -20,7 +20,7 @@ export function LoginForm({ next }: { next?: string | null }) {
     });
     setPending(false);
     if (!res || res.error) {
-      setError('Invalid email or password.');
+      setError('Invalid username or password.');
       return;
     }
     window.location.href = redirectTarget;
@@ -29,12 +29,12 @@ export function LoginForm({ next }: { next?: string | null }) {
   return (
     <>
       <form onSubmit={onSubmit} className="flex flex-col gap-3">
-        <Field label="Email">
+        <Field label="Username or email">
           <input
             name="email"
-            type="email"
+            type="text"
             required
-            autoComplete="email"
+            autoComplete="username"
             className={inputCls}
           />
         </Field>

@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import QRCode from 'qrcode';
 import { auth } from '@/auth';
 import { db } from '@/db';
+import { identifierOf } from '@/lib/identity';
 import { users } from '@/db/schema';
 import { encodeBase32, generateSecret, provisioningUri } from '@/lib/totp';
 
@@ -22,7 +23,7 @@ export async function POST() {
 
   const me = await db.query.users.findFirst({
     where: eq(users.id, session.user.id),
-    columns: { email: true },
+    columns: { email: true, username: true },
   });
   if (!me) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
@@ -34,7 +35,7 @@ export async function POST() {
     .set({ totpSecret: secret, totpEnabled: false })
     .where(eq(users.id, session.user.id));
 
-  const uri = provisioningUri(secret, me.email);
+  const uri = provisioningUri(secret, identifierOf(me));
   const qrDataUrl = await QRCode.toDataURL(uri, { margin: 1, width: 256 });
 
   return NextResponse.json({

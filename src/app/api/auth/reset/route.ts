@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ZodError, z } from 'zod';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '@/db';
+import { whereAnyIdentifier } from '@/lib/identity';
 import { recoveryCodes, users } from '@/db/schema';
 import { hashPassword } from '@/lib/password';
 import { canonicalise, hashCode } from '@/lib/recovery-codes';
@@ -22,13 +23,13 @@ export const dynamic = 'force-dynamic';
 // enumerate which emails have accounts.
 
 const schema = z.object({
-  email: z.string().email().max(254).transform((s) => s.trim().toLowerCase()),
+  email: z.string().min(1).max(254).transform((s) => s.trim().toLowerCase()),
   mechanism: z.enum(['recovery', 'totp']),
   proof: z.string().min(1).max(64),
   newPassword: z.string().min(8).max(200),
 });
 
-const GENERIC_INVALID = { error: 'invalid email or proof' };
+const GENERIC_INVALID = { error: 'invalid account or proof' };
 
 export async function POST(req: NextRequest) {
   let body: z.infer<typeof schema>;
@@ -45,7 +46,7 @@ export async function POST(req: NextRequest) {
   }
 
   const user = await db.query.users.findFirst({
-    where: eq(users.email, body.email),
+    where: whereAnyIdentifier(body.email),
     columns: { id: true, totpSecret: true, totpEnabled: true },
   });
   // Match the success-path response shape on failure so a timing or

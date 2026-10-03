@@ -27,7 +27,11 @@ const schema = z.object({
   // subtraction.
   keepPublicContributions: z.boolean(),
   // Sanity gate. Must exactly match the caller's current email.
-  confirmEmail: z.string().email().max(254),
+  // Not .email(): this is matched against the account's sign-in
+  // identifier, which may be a username. Validating it as an address
+  // here rejected username accounts before the comparison below ever
+  // ran, so they could not delete their own account.
+  confirmEmail: z.string().min(1).max(254),
 });
 
 export async function POST(req: NextRequest) {

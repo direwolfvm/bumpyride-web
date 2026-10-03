@@ -70,12 +70,15 @@ export function ForgotForm() {
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-3">
       <label className={labelCls}>
-        Email
+        Username or email
         <input
           name="email"
-          type="email"
+          // Not type="email": an account identified by a username must
+          // be able to reset its password, and reset is the only
+          // recovery path there is.
+          type="text"
           required
-          autoComplete="email"
+          autoComplete="username"
           className={fieldCls}
         />
       </label>

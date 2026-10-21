@@ -169,7 +169,7 @@ Every pull request and push to `main` runs [`ci.yml`](.github/workflows/ci.yml):
 
 Continuous deploy on push to `main` is driven by [`cloudbuild.yaml`](cloudbuild.yaml). The pipeline:
 
-1. Build the Docker image, tagged `:$COMMIT_SHA` and `:latest`
+1. Build the Docker image, tagged `:$BUILD_ID` and `:latest` (the commit is in the `org.opencontainers.image.revision` label)
 2. Push both tags to Artifact Registry (`us-east4-docker.pkg.dev/bumpyride/bumpyride-web/bumpyride-web`)
 3. Point the `bumpyride-migrate` Cloud Run Job at the new image
 4. Execute the job and wait for completion — if migrations fail, the build fails and the new image never takes traffic

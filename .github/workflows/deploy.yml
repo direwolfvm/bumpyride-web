@@ -30,6 +30,7 @@ env:
   APP_URL: https://bumpyride.me
   WORKLOAD_IDENTITY_PROVIDER: projects/650621702399/locations/global/workloadIdentityPools/github/providers/github-oidc
   DEPLOYER_SERVICE_ACCOUNT: bumpyride-deployer@bumpyride.iam.gserviceaccount.com
+  BUILD_SERVICE_ACCOUNT: bumpyride-build@bumpyride.iam.gserviceaccount.com
 
 jobs:
   deploy:
@@ -64,7 +65,9 @@ jobs:
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       # _GIT_SHA records the commit on the image (see cloudbuild.yaml). The
-      # staging directory is given so the deployer does not
+      # build runs as bumpyride-build, the same service account the Cloud
+      # Build trigger used, instead of the project's default compute account.
+      # The staging directory is given so the deployer does not
       # need permission to list every bucket in the project.
       - name: Submit Cloud Build
         run: |
@@ -72,6 +75,7 @@ jobs:
             --config cloudbuild.yaml \
             --project "$GCP_PROJECT" \
             --gcs-source-staging-dir "gs://${GCP_PROJECT}_cloudbuild/source" \
+            --service-account "projects/${GCP_PROJECT}/serviceAccounts/${BUILD_SERVICE_ACCOUNT}" \
             --substitutions "_GIT_SHA=${GITHUB_SHA}" \
             --quiet
 

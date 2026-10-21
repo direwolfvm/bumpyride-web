@@ -9,11 +9,14 @@
 # "production" environment only allows deployments from main. No long-lived
 # cloud keys are stored in GitHub.
 #
-# Manual-only until the Cloud Build GitHub trigger is disabled. Never run this
-# on push while that trigger is enabled, or a merge deploys twice.
+# This replaced the Cloud Build GitHub trigger (bumpyride-web-main), which is
+# kept disabled; never re-enable it while this workflow runs on push, or a
+# merge deploys twice. To pause deploys: gh workflow disable deploy.yml.
 name: Deploy
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:

@@ -1,4 +1,4 @@
-# Cloud Build pipeline driven by a trigger on push to main.
+# Cloud Build pipeline, submitted by .github/workflows/deploy.yml on push to main.
 #
 # Steps (sequential — migrations land before the new code starts serving so
 # the running revision never sees an unmigrated schema):

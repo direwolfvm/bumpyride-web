@@ -167,7 +167,7 @@ Every pull request and push to `main` runs [`ci.yml`](.github/workflows/ci.yml):
 
 ## Deploy (Cloud Run + Cloud SQL)
 
-Continuous deploy on push to `main` is driven by [`cloudbuild.yaml`](cloudbuild.yaml). The pipeline:
+Continuous deploy on push to `main` runs [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml): it authenticates keylessly (Workload Identity Federation) as `bumpyride-deployer`, submits [`cloudbuild.yaml`](cloudbuild.yaml) as `bumpyride-build`, then checks `https://bumpyride.me/api/health`. The old Cloud Build GitHub trigger `bumpyride-web-main` is disabled; don't re-enable it alongside the workflow. The pipeline:
 
 1. Build the Docker image, tagged `:$BUILD_ID` and `:latest` (the commit is in the `org.opencontainers.image.revision` label)
 2. Push both tags to Artifact Registry (`us-east4-docker.pkg.dev/bumpyride/bumpyride-web/bumpyride-web`)

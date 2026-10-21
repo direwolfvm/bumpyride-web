@@ -1,0 +1,36 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Type definitions track the runtime major (Node 22 in the Dockerfile and
+      # workflows). Bump them together with the runtime, not on their own.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      # The CodeQL init and analyze steps must move together, so group every
+      # action update into one pull request.
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    ignore:
+      # Move to a new Node major deliberately, together with setup-node and
+      # @types/node.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

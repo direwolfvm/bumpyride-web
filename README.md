@@ -161,11 +161,15 @@ See [`migrations/0001_init.sql`](migrations/0001_init.sql) and [`migrations/0002
 
 `rides.distance_m`, `max_bumpiness`, `avg_bumpiness` are denormalised on write so the rides-list view doesn't need to scan `ride_points`.
 
+## CI
+
+Every pull request and push to `main` runs [`ci.yml`](.github/workflows/ci.yml): typecheck, a production dependency audit (`npm run audit:prod`, reviewed exceptions live in [`scripts/audit-gate.mjs`](scripts/audit-gate.mjs)), `next build`, a Docker build, gitleaks, and dependency review on PRs. [`codeql.yml`](.github/workflows/codeql.yml) runs CodeQL weekly and on PRs. Dependabot opens weekly npm, Actions and Docker updates.
+
 ## Deploy (Cloud Run + Cloud SQL)
 
 Continuous deploy on push to `main` is driven by [`cloudbuild.yaml`](cloudbuild.yaml). The pipeline:
 
-1. Build the Docker image, tagged `:$COMMIT_SHA` and `:latest`
+1. Build the Docker image, tagged `:$BUILD_ID` and `:latest` (the commit is in the `org.opencontainers.image.revision` label)
 2. Push both tags to Artifact Registry (`us-east4-docker.pkg.dev/bumpyride/bumpyride-web/bumpyride-web`)
 3. Point the `bumpyride-migrate` Cloud Run Job at the new image
 4. Execute the job and wait for completion — if migrations fail, the build fails and the new image never takes traffic

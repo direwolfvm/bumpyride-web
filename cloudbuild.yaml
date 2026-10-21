@@ -2,7 +2,7 @@
 #
 # Steps (sequential — migrations land before the new code starts serving so
 # the running revision never sees an unmigrated schema):
-#   1. Build the image, tagging with both $COMMIT_SHA and `latest`
+#   1. Build the image, tagging with both $BUILD_ID and `latest`
 #   2. Push both tags to Artifact Registry
 #   3. Point the bumpyride-migrate Cloud Run Job at the new image
 #   4. Execute the job and wait for it to finish (build fails if migrate fails)
@@ -18,6 +18,11 @@ substitutions:
   # inside user-substitution VALUES — only inside `args`, `images`, `tags`, etc.
   # So _REPO has to be a literal string, not interpolated from $PROJECT_ID.
   _REPO: us-east4-docker.pkg.dev/bumpyride/bumpyride-web/bumpyride-web
+  # Set by .github/workflows/deploy.yml. `gcloud builds submit` leaves the
+  # built-in $COMMIT_SHA empty and only accepts _-prefixed overrides, so the
+  # image is tagged with $BUILD_ID (always set) and records the commit in a
+  # label: $COMMIT_SHA for trigger builds, _GIT_SHA for Actions builds.
+  _GIT_SHA: ''
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -27,8 +32,9 @@ steps:
     name: gcr.io/cloud-builders/docker
     args:
       - build
-      - --tag=${_REPO}:$COMMIT_SHA
+      - --tag=${_REPO}:$BUILD_ID
       - --tag=${_REPO}:latest
+      - --label=org.opencontainers.image.revision=$COMMIT_SHA${_GIT_SHA}
       - .
 
   - id: push
@@ -44,7 +50,7 @@ steps:
       - jobs
       - update
       - bumpyride-migrate
-      - --image=${_REPO}:$COMMIT_SHA
+      - --image=${_REPO}:$BUILD_ID
       - --region=${_REGION}
       - --quiet
     waitFor: [push]
@@ -69,13 +75,13 @@ steps:
       - run
       - deploy
       - bumpyride-web
-      - --image=${_REPO}:$COMMIT_SHA
+      - --image=${_REPO}:$BUILD_ID
       - --region=${_REGION}
       - --quiet
     waitFor: [migrate-execute]
 
 images:
-  - ${_REPO}:$COMMIT_SHA
+  - ${_REPO}:$BUILD_ID
   - ${_REPO}:latest
 
 timeout: 1200s

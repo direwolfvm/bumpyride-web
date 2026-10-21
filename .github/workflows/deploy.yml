@@ -1,0 +1,93 @@
+# Deploys main to Cloud Run through the existing cloudbuild.yaml pipeline
+# (image build, bumpyride-migrate job, then the service rollout), then checks
+# /api/health on the live site.
+#
+# Authentication is keyless: GitHub issues an OIDC token for this workflow run
+# and Workload Identity Federation (the shared "github" pool in
+# permitting-ai-helper) exchanges it for short-lived credentials of the
+# bumpyride-deployer service account in the bumpyride project. The
+# "production" environment only allows deployments from main. No long-lived
+# cloud keys are stored in GitHub.
+#
+# Manual-only until the Cloud Build GitHub trigger is disabled. Never run this
+# on push while that trigger is enabled, or a merge deploys twice.
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: bumpyride
+  GCP_REGION: us-east4
+  SERVICE: bumpyride-web
+  APP_URL: https://bumpyride.me
+  WORKLOAD_IDENTITY_PROVIDER: projects/650621702399/locations/global/workloadIdentityPools/github/providers/github-oidc
+  DEPLOYER_SERVICE_ACCOUNT: bumpyride-deployer@bumpyride.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    name: Build, migrate and deploy to Cloud Run
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment:
+      name: production
+      url: https://bumpyride.me
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A last gate before shipping, in case a merge bypassed the CI checks.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run audit:prod
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      # _GIT_SHA records the commit on the image (see cloudbuild.yaml). The
+      # staging directory is given so the deployer does not
+      # need permission to list every bucket in the project.
+      - name: Submit Cloud Build
+        run: |
+          gcloud builds submit \
+            --config cloudbuild.yaml \
+            --project "$GCP_PROJECT" \
+            --gcs-source-staging-dir "gs://${GCP_PROJECT}_cloudbuild/source" \
+            --substitutions "_GIT_SHA=${GITHUB_SHA}" \
+            --quiet
+
+      - name: Verify the live service
+        run: |
+          revision=$(gcloud run services describe "$SERVICE" \
+            --region "$GCP_REGION" --project "$GCP_PROJECT" \
+            --format 'value(status.latestReadyRevisionName)')
+          echo "Serving revision: $revision"
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error "$APP_URL/api/health"; then
+              echo
+              echo "Health check passed."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Health check failed after deploy." >&2
+          exit 1

@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string }>;
+  searchParams: Promise<{ next?: string; error?: string }>;
 }) {
   const params = await searchParams;
   const next = safeNext(params.next);
@@ -23,6 +23,13 @@ export default async function LoginPage({
   return (
     <div className="mx-auto max-w-sm">
       <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
+      {params.error === 'OAuthAccountNotLinked' && (
+        <p className="mt-4 text-sm text-danger">
+          That Google account&apos;s email already belongs to a BumpyRide
+          account with a password. Sign in with your username or email and
+          password instead.
+        </p>
+      )}
       <div className="mt-6 rounded-lg border border-border bg-surface p-6">
         <LoginForm next={next} />
       </div>

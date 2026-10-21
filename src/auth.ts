@@ -4,6 +4,7 @@ import Google from 'next-auth/providers/google';
 import { DrizzleAdapter } from '@auth/drizzle-adapter';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
+import { allowAttempt, clientIp, signInQuotas } from '@/lib/rate-limit';
 import { db } from '@/db';
 import { whereAnyIdentifier } from '@/lib/identity';
 import { identifierOf } from '@/lib/identity';
@@ -36,10 +37,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     signIn: '/login',
   },
   providers: [
+    // No allowDangerousEmailAccountLinking: password sign-up never verifies
+    // an email address, so linking Google by email would let someone who
+    // registered a victim's address first share that victim's account.
+    // A Google identity whose email matches an existing password account
+    // is refused with OAuthAccountNotLinked instead (see /login).
     Google({
       clientId: process.env.AUTH_GOOGLE_ID,
       clientSecret: process.env.AUTH_GOOGLE_SECRET,
-      allowDangerousEmailAccountLinking: true,
     }),
     Credentials({
       credentials: {
@@ -48,10 +53,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         email: { label: 'Username or email', type: 'text' },
         password: { label: 'Password', type: 'password' },
       },
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         const raw = String(credentials?.email ?? '').trim().toLowerCase();
         const password = String(credentials?.password ?? '');
         if (!raw || !password) return null;
+        if (!(await allowAttempt(signInQuotas(raw, clientIp(request.headers))))) {
+          return null;
+        }
 
         const row = await db.query.users.findFirst({
           where: whereAnyIdentifier(raw),

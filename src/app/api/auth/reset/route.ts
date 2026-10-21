@@ -7,6 +7,7 @@ import { recoveryCodes, users } from '@/db/schema';
 import { hashPassword } from '@/lib/password';
 import { canonicalise, hashCode } from '@/lib/recovery-codes';
 import { verifyCode as verifyTotp } from '@/lib/totp';
+import { allowAttempt, clientIp, resetQuotas } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,6 +44,15 @@ export async function POST(req: NextRequest) {
       );
     }
     return NextResponse.json({ error: 'invalid JSON' }, { status: 400 });
+  }
+
+  // Checked before the user lookup so the response is the same whether or
+  // not the account exists.
+  if (!(await allowAttempt(resetQuotas(body.email, clientIp(req.headers))))) {
+    return NextResponse.json(
+      { error: 'too many attempts; try again later' },
+      { status: 429 },
+    );
   }
 
   const user = await db.query.users.findFirst({
